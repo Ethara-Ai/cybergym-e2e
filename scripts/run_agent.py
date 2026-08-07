@@ -500,6 +500,17 @@ chown -R agent:agent /src /output /out /work 2>/dev/null || true
         if code != 0:
             raise Exception(f"Failed to install Gemini CLI: {stderr[-500:]}")
 
+    elif agent_id == "opencode":
+        if not scripts_dir:
+            raise ValueError("scripts_dir required for opencode")
+        copy_to_container(container_id, scripts_dir / "install_opencode.sh", "/install_opencode.sh")
+        code, _, stderr = exec_run(
+            container_id, "bash -eux /install_opencode.sh",
+            "Installing OpenCode", timeout=1800
+        )
+        if code != 0:
+            raise Exception(f"Failed to install OpenCode: {stderr[-500:]}")
+
     else:
         raise ValueError(f"Unknown agent: {agent_id}")
 
@@ -568,6 +579,24 @@ def _execute_openhands(container_id, prompt, args):
         aws_region=args.aws_region,
         aws_profile=args.aws_profile,
     )
+
+    # Optional: route OpenHands' LiteLLM through a custom Anthropic endpoint
+    # (e.g. a local Claude OAuth bridge). Only active when ANTHROPIC_BASE_URL is
+    # set in the host env; otherwise OpenHands hits api.anthropic.com directly.
+    if args.model_provider == "anthropic":
+        base_url = os.environ.get("ANTHROPIC_BASE_URL")
+        if base_url:
+            env["LLM_BASE_URL"] = base_url
+            env["ANTHROPIC_API_BASE"] = base_url
+            env["ANTHROPIC_BASE_URL"] = base_url
+            # LiteLLM needs the provider prefix to select the Anthropic handler
+            # and honor the custom base_url.
+            if not env.get("LLM_MODEL", "").startswith("anthropic/"):
+                env["LLM_MODEL"] = "anthropic/" + env.get("LLM_MODEL", "")
+            env["LLM_DROP_PARAMS"] = "true"
+            auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+            if auth_token:
+                env["ANTHROPIC_AUTH_TOKEN"] = auth_token
 
     code, stdout, stderr = exec_run(
         container_id,
@@ -716,7 +745,7 @@ EOF''',
         timeout=args.timeout,
         env=env,
     )
-    
+
     # Write output to file
     with open(output_file, "w") as f:
         if stdout:
@@ -724,7 +753,90 @@ EOF''',
         if stderr:
             f.write("\n--- stderr ---\n")
             f.write(stderr)
-    
+
+    return code
+
+
+def _execute_opencode(container_id, prompt, output_file, args):
+    """Execute the OpenCode agent (headless) and return exit code.
+
+    OpenCode speaks the Anthropic protocol via the AI SDK, so it can target the
+    same Claude OAuth bridge as claude-code: its Anthropic provider POSTs to
+    {baseURL}/v1/messages with x-api-key. Only supported for --model-provider
+    anthropic (the bridge/subscription path); other providers raise upstream.
+
+    Args:
+        container_id: Docker container ID (already set up with workspace)
+        prompt: Prompt string for the agent
+        output_file: Path to write agent output/log
+        args: Command line arguments
+
+    Returns:
+        exit_code: Agent exit code
+    """
+    escaped_prompt = shlex.quote(prompt)
+
+    # Endpoint + key. If ANTHROPIC_BASE_URL is set (bridge), OpenCode's Anthropic
+    # provider is redirected there; otherwise it hits api.anthropic.com directly.
+    base_url = os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+    model_id = args.anthropic_model_id
+
+    # OpenCode's Anthropic (AI SDK) provider appends "/messages" to the provider
+    # baseURL, so the baseURL MUST include the "/v1" version segment — otherwise
+    # requests hit "/messages" and the bridge forwards to a 404 upstream.
+    provider_base = base_url.rstrip("/")
+    if not provider_base.endswith("/v1"):
+        provider_base = provider_base + "/v1"
+
+    # Global OpenCode config: custom Anthropic provider pointing at the bridge,
+    # autonomous permissions for a non-interactive run, and no web tools.
+    config = {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {
+            "anthropic": {
+                "options": {"baseURL": provider_base, "apiKey": api_key},
+                "models": {model_id: {}},
+            }
+        },
+        "model": f"anthropic/{model_id}",
+        "permission": {"edit": "allow", "bash": "allow", "webfetch": "deny"},
+    }
+    config_json = json.dumps(config)
+    exec_run(
+        container_id,
+        "mkdir -p /root/.config/opencode && "
+        f"cat > /root/.config/opencode/opencode.json << 'OC_EOF'\n{config_json}\nOC_EOF",
+        "Writing opencode config", verbose=False,
+    )
+
+    print("  Running OpenCode...")
+    print(f"  Output: {output_file}")
+
+    env = {"ANTHROPIC_API_KEY": api_key}
+    if os.environ.get("ANTHROPIC_BASE_URL"):
+        env["ANTHROPIC_BASE_URL"] = base_url
+    auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+    if auth_token:
+        env["ANTHROPIC_AUTH_TOKEN"] = auth_token
+
+    code, stdout, stderr = exec_run(
+        container_id,
+        f"source $HOME/.nvm/nvm.sh && cd /src && "
+        f"opencode run --model anthropic/{model_id} --print-logs {escaped_prompt}",
+        "Running agent",
+        timeout=args.timeout,
+        env=env,
+    )
+
+    # Write output to file
+    with open(output_file, "w") as f:
+        if stdout:
+            f.write(stdout)
+        if stderr:
+            f.write("\n--- stderr ---\n")
+            f.write(stderr)
+
     return code
 
 
@@ -773,6 +885,15 @@ def run_agent(args, config, script_path, data_path, prompt, attempt, work_dir, t
                     raise RuntimeError("--model-provider anthropic requires ANTHROPIC_API_KEY to be set in the environment")
                 env_vars["ANTHROPIC_API_KEY"] = api_key
                 env_vars["ANTHROPIC_MODEL"] = args.anthropic_model_id
+                # Optional: route the in-container claude CLI through a custom
+                # endpoint (e.g. a local Claude OAuth bridge). Only forwarded
+                # when set in the host env; unset => default api.anthropic.com.
+                base_url = os.environ.get("ANTHROPIC_BASE_URL")
+                if base_url:
+                    env_vars["ANTHROPIC_BASE_URL"] = base_url
+                auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+                if auth_token:
+                    env_vars["ANTHROPIC_AUTH_TOKEN"] = auth_token
             else:
                 raise RuntimeError(f"claude-code does not support --model-provider {args.model_provider}")
         
@@ -802,9 +923,19 @@ def run_agent(args, config, script_path, data_path, prompt, attempt, work_dir, t
             exit_code = _execute_codex(container_id, prompt, str(log_file), args)
         elif args.agent == "gemini-cli":
             exit_code = _execute_gemini_cli(container_id, prompt, str(log_file), args)
+        elif args.agent == "opencode":
+            exit_code = _execute_opencode(container_id, prompt, str(log_file), args)
         else:  # openhands
             exit_code, stdout, stderr = _execute_openhands(container_id, prompt, args)
-            # OpenHands may have separate trajectory files
+            # Persist OpenHands' stdout/stderr as the attempt trajectory — unlike
+            # the other agents, _execute_openhands does not write the log file.
+            with open(str(log_file), "w") as f:
+                if stdout:
+                    f.write(stdout)
+                if stderr:
+                    f.write("\n--- stderr ---\n")
+                    f.write(stderr)
+            # OpenHands may also emit a structured trajectory file
             subprocess.run(
                 ["docker", "cp", f"{container_id}:/agent_trajectory/.", str(trajectory_dir)],
                 capture_output=True
@@ -1024,7 +1155,7 @@ Examples:
     parser.add_argument("task_path", help="Task path (e.g., curl/arvo_66012)")
 
     # Agent selection
-    parser.add_argument("--agent", choices=["claude-code", "openhands", "codex", "gemini-cli"], default="claude-code",
+    parser.add_argument("--agent", choices=["claude-code", "openhands", "codex", "gemini-cli", "opencode"], default="claude-code",
                         help="Agent backend to use (default: claude-code)")
     parser.add_argument("--prompt-style", choices=["iterative", "no-test"], default="iterative",
                         help="Prompt style: iterative (can test) or no-test (default: iterative)")

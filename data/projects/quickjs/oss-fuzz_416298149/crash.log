@@ -1,0 +1,6 @@
+=================================================================
+==1234==ERROR: AddressSanitizer: SEGV on unknown address 0x602000
+==1234==The signal is caused by a READ memory access.
+==1234==Hint: address points to the heap object at 0x600000
+Address 0x602000 is located inside 8192-byte region
+SUMMARY: AddressSanitizer: SEGV

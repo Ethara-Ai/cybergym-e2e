@@ -1,0 +1,30 @@
+
+--- stderr ---
+timestamp=2026-08-07T11:22:43.482Z level=INFO run=ddb41d3c message="creating instance" directory=/src
+timestamp=2026-08-07T11:22:43.487Z level=INFO run=ddb41d3c message=fromDirectory directory=/src
+timestamp=2026-08-07T11:22:43.528Z level=INFO run=ddb41d3c message=bootstrapping directory=/src
+timestamp=2026-08-07T11:22:43.538Z level=INFO run=ddb41d3c message=loading path=/root/.config/opencode/config.json
+timestamp=2026-08-07T11:22:43.541Z level=INFO run=ddb41d3c message=loading path=/root/.config/opencode/opencode.json
+timestamp=2026-08-07T11:22:43.555Z level=INFO run=ddb41d3c message=loading path=/root/.config/opencode/opencode.jsonc
+timestamp=2026-08-07T11:22:43.951Z level=INFO run=ddb41d3c message="all LSPs are disabled"
+timestamp=2026-08-07T11:22:43.954Z level=INFO run=ddb41d3c message="all formatters are disabled"
+timestamp=2026-08-07T11:22:43.954Z level=INFO run=ddb41d3c message=init
+timestamp=2026-08-07T11:22:44.352Z level=INFO run=ddb41d3c message=created id=ses_02409ef00ffe5c3I1RTKgcqDJC slug=misty-eagle version=1.18.15 projectID=global directory=/src path=src workspaceID=undefined parentID=undefined title="New session - 2026-08-07T11:22:44.352Z" agent=undefined model=undefined metadata=undefined permission="[{\"permission\":\"question\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_enter\",\"pattern\":\"*\",\"action\":\"deny\"},{\"permission\":\"plan_exit\",\"pattern\":\"*\",\"action\":\"deny\"}]" cost=0 tokens.input=0 tokens.output=0 tokens.reasoning=0 tokens.cache.read=0 tokens.cache.write=0 time.created=1786101764352 time.updated=1786101764352
+timestamp=2026-08-07T11:22:44.390Z level=INFO run=ddb41d3c message="event connected"
+timestamp=2026-08-07T11:22:45.079Z level=INFO run=ddb41d3c message=loop session.id=ses_02409ef00ffe5c3I1RTKgcqDJC step=0
+timestamp=2026-08-07T11:22:45.110Z level=INFO run=ddb41d3c message="shell tool using shell" shell=/usr/bin/bash
+timestamp=2026-08-07T11:22:45.141Z level=INFO run=ddb41d3c message=init count=1
+[0m
+> build · claude-opus-4-8
+[0m
+timestamp=2026-08-07T11:22:45.258Z level=INFO run=ddb41d3c message=stream providerID=anthropic modelID=claude-haiku-4-5-20251001 session.id=ses_02409ef00ffe5c3I1RTKgcqDJC small=true agent=title mode=primary
+timestamp=2026-08-07T11:22:45.291Z level=INFO run=ddb41d3c message="llm runtime selected" llm.runtime=ai-sdk llm.provider=anthropic llm.model=claude-haiku-4-5-20251001
+timestamp=2026-08-07T11:22:45.535Z level=INFO run=ddb41d3c message="watcher backend" directory=/src platform=linux backend=inotify
+timestamp=2026-08-07T11:22:45.576Z level=INFO run=ddb41d3c message="booting location services" directory=/src workspaceID=undefined
+timestamp=2026-08-07T11:22:45.596Z level=INFO run=ddb41d3c message="project copy refresh started" projectID=global
+timestamp=2026-08-07T11:22:45.605Z level=INFO run=ddb41d3c message="project copy refresh done" projectID=global updated=[] removed=[]
+timestamp=2026-08-07T11:22:46.064Z level=INFO run=ddb41d3c message=process session.id=ses_02409ef00ffe5c3I1RTKgcqDJC messageID=msg_fdbf613df001wXrU808bm56UvB
+timestamp=2026-08-07T11:22:46.067Z level=INFO run=ddb41d3c message=stream providerID=anthropic modelID=claude-opus-4-8 session.id=ses_02409ef00ffe5c3I1RTKgcqDJC small=false agent=build mode=primary
+timestamp=2026-08-07T11:22:46.076Z level=INFO run=ddb41d3c message="llm runtime selected" llm.runtime=ai-sdk llm.provider=anthropic llm.model=claude-opus-4-8
+[91m[1mError: [0mThe response was blocked by the provider's content filter
+timestamp=2026-08-07T11:22:47.259Z level=INFO run=ddb41d3c message="disposing instance" directory=/src

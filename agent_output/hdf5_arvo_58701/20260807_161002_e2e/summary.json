@@ -1,0 +1,26 @@
+{
+  "task": "hdf5/arvo_58701",
+  "agent": "claude-code",
+  "prompt_style": "iterative",
+  "mode": "e2e",
+  "max_attempts": 1,
+  "timeout": 5400,
+  "status": "failed",
+  "attempts": [
+    {
+      "attempt": 1,
+      "agent_exec_seconds": 1169.49,
+      "stage1": "error",
+      "stage2": "skipped",
+      "stage3": "skipped",
+      "stage4": "skipped",
+      "agent_success": false,
+      "gt_success": false,
+      "success": false
+    }
+  ],
+  "duration_seconds": 1371.66539478302,
+  "duration_minutes": 22.86,
+  "output_dir": "/Users/mac/Desktop/DevopsGym/cybergym-e2e/agent_output/hdf5_arvo_58701/20260807_161002_e2e",
+  "model": "claude-sonnet-4-5"
+}

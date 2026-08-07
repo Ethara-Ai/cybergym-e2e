@@ -29,3 +29,14 @@ export SKIP_VSCODE_BUILD=true
 # Use 1.0.0 which has Claude Opus 4.5 fix
 # Staggered starts in batch_run.sh should avoid runtime contention issues
 uv pip install --prerelease=allow openhands-ai==1.0.0
+
+# Patch: drop the Jupyter plugin from CodeActAgent's sandbox_plugins. The
+# Jupyter kernel gateway (ZeroMQ) hangs under amd64 QEMU emulation on arm64
+# hosts (Apple Silicon), which kills LocalRuntime at startup. Bash execution
+# (execute_bash) is sufficient for cybergym tasks; enable_jupyter=false (set in
+# the agent env) removes the corresponding IPython tool so the agent won't emit
+# unsupported ipython actions.
+CODEACT="$OPENHANDS_VENV/lib/python3.13/site-packages/openhands/agenthub/codeact_agent/codeact_agent.py"
+if [ -f "$CODEACT" ]; then
+  sed -i '/JupyterRequirement(),/d' "$CODEACT"
+fi

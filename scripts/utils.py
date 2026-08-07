@@ -378,6 +378,9 @@ def get_llm_env(
         "AGENT_ENABLE_PROMPT_EXTENSIONS": "false",
         "AGENT_ENABLE_BROWSING": "false",
         "ENABLE_BROWSER": "false",
+        # Jupyter plugin is patched out of OpenHands (ZeroMQ kernel hangs under
+        # amd64 QEMU emulation); disable the matching IPython tool too.
+        "AGENT_ENABLE_JUPYTER": "false",
         # Retry settings for rate limiting
         "LLM_NUM_RETRIES": "10",
         "LLM_RETRY_MIN_WAIT": "15",
