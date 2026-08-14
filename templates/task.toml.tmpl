@@ -1,0 +1,26 @@
+schema_version = "1.1"
+artifacts = ["/output/poc.bin", "/output/fix.patch"]
+
+[task]
+name = "%%TASK_NAME%%"
+description = "%%DESCRIPTION%%"
+keywords = ["security", "%%LANGUAGE%%", "memory-safety", "cybergym-e2e"]
+
+[metadata]
+difficulty = "hard"
+category = "Security"
+subcategory = "Vulnerability discovery"
+family = "cybergym-e2e"
+tags = ["cybergym", "%%MODE%%", "%%LANGUAGE%%", "fuzzing"]
+
+[verifier]
+timeout_sec = %%VERIFIER_TIMEOUT%%.0
+environment_mode = "separate"
+
+[agent]
+timeout_sec = %%AGENT_TIMEOUT%%.0
+
+[environment]
+build_timeout_sec = 900.0
+allow_internet = false
+mcp_servers = []

@@ -87,7 +87,7 @@ def copy_to_container(container_id, src_path, dst_path, file_list=None):
             raise Exception(f"Failed to copy {src_path}: {result.stderr}")
 
 
-def start_container(image, env_vars=None, container_name=None, workdir=None):
+def start_container(image, env_vars=None, container_name=None, workdir=None, add_host_gateway=False):
     """Start a Docker container and return its ID.
 
     Args:
@@ -95,11 +95,18 @@ def start_container(image, env_vars=None, container_name=None, workdir=None):
         env_vars: Dict of environment variables to set in container (optional)
         container_name: Name for the container (optional)
         workdir: Working directory in container (optional)
+        add_host_gateway: If True, map host.docker.internal to the host gateway so
+            an in-container process can reach a service on the host loopback (e.g.
+            the Claude Code OAuth bridge). Automatic on Docker Desktop; required on
+            native Linux.
 
     Returns:
         Container ID
     """
     cmd = ["docker", "run", "-d", "--rm"]
+
+    if add_host_gateway:
+        cmd.extend(["--add-host", "host.docker.internal:host-gateway"])
 
     if container_name:
         cmd.extend(["--name", container_name])
@@ -389,6 +396,20 @@ def get_llm_env(
     }
 
     if model_provider == "bedrock":
+        bearer = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+        if bearer:
+            llm_model = f"bedrock/{bedrock_model_id}"
+            env = {
+                **base_env,
+                "LLM_MODEL": llm_model,
+                "AWS_BEARER_TOKEN_BEDROCK": bearer,
+                "AWS_REGION_NAME": aws_region,
+                "LLM_AWS_REGION_NAME": aws_region,
+                "LLM_DROP_PARAMS": "true",
+                "LLM_TEMPERATURE": "0.0",
+            }
+            return env, llm_model
+
         try:
             session = boto3.Session(profile_name=aws_profile)
             credentials = session.get_credentials()
@@ -427,6 +448,14 @@ def get_llm_env(
             "LLM_MODEL": llm_model,
             "LLM_API_KEY": anthropic_api_key,
             "ANTHROPIC_API_KEY": anthropic_api_key,
+            # Newer Claude models (incl. those served via a local bridge) reject
+            # `temperature` ("deprecated for this model"). OpenHands always sends
+            # temperature=0.0; drop_params lets litellm strip params it considers
+            # unsupported, and install_openhands.sh patches litellm so temperature
+            # is treated as unsupported for Anthropic. Keep this consistent with
+            # the bedrock branch above.
+            "LLM_DROP_PARAMS": "true",
+            "LLM_TEMPERATURE": "0.0",
         }
         return env, llm_model
     else:

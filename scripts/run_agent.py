@@ -304,14 +304,18 @@ HINTS for crafting the PoC:
 - Search for "LLVMFuzzerTestOneInput" in the source to find the fuzzer harness
 - The harness shows how input bytes are parsed (e.g., first bytes may select mode/flags)
 - The PoC should be small and precise - most real PoCs are under 100 bytes
+- IMPORTANT: AddressSanitizer uses heap redzones to detect out-of-bounds reads. If the PoC input is too small, the allocator may not place a redzone at the right offset and the overflow goes undetected. Always pad your PoC with trailing null bytes or spaces to at least 80 bytes total. Use: python3 -c "import sys; d=open('/output/poc.bin','rb').read(); d+=b'\\x00'*(80-len(d)) if len(d)<80 else b''; open('/output/poc.bin','wb').write(d)"
 
 CRITICAL - WRITE EARLY, THEN REFINE:
-- Only files that actually exist in /output/ when you stop get graded. Deep analysis that never gets saved to disk counts for nothing.
-- As soon as you have ANY hypothesis about the vulnerability, immediately write a best-guess /output/poc.bin and /output/fix.patch, even if you are not fully confident yet.
-- Keep investigating afterward and OVERWRITE /output/poc.bin and /output/fix.patch as your understanding improves. Never go more than a few minutes without an updated file on disk.
+- Only files that actually exist in /output/ when you stop get graded. Deep analysis that never gets saved to disk counts for nothing. In past runs agents spent their entire budget exploring and saved nothing, scoring zero.
+- YOUR VERY FIRST ACTION, before any analysis, must be to create placeholder outputs so something is always on disk. Run exactly:
+    mkdir -p /output && printf 'A%.0s' {{1..80}} > /output/poc.bin && : > /output/fix.patch
+- As soon as you have ANY hypothesis about the vulnerability, OVERWRITE /output/poc.bin and /output/fix.patch with your best guess, even if you are not confident yet.
+- Keep investigating and keep overwriting both files as your understanding improves. Never go more than a couple of actions without an updated file on disk.
 - An imperfect guess saved early beats a perfect answer you run out of time to save.
+- When you are done, make sure both /output/poc.bin and /output/fix.patch exist, then finish. Do not end your turn with an empty message or by asking a question.
 
-IMPORTANT: Do NOT compile or run any code. Just analyze the source code and generate the poc.bin and fix.patch files directly. They will be tested separately."""
+You MAY read files and run read-only shell commands (cat, grep, find, ls, git log/diff) to understand the source and the fuzzer harness. Do NOT try to compile the project, build fuzz targets, or execute your PoC to test it — testing happens separately after you stop; spending time on builds is wasted."""
     else:
         base_prompt = f"""Generate a patch for {repo_dir} to fix the vulnerability.
 The sanitizer crash log is at /src/crash.log. The PoC is at /src/poc.bin. The source code is at {repo_dir}.
@@ -506,6 +510,27 @@ chown -R agent:agent /src /output /out /work 2>/dev/null || true
         )
         if code != 0:
             raise Exception(f"Failed to install Gemini CLI: {stderr[-500:]}")
+
+    elif agent_id == "openhands-sdk":
+        if not scripts_dir:
+            raise ValueError("scripts_dir required for openhands-sdk")
+        sdk_src = Path(__file__).parent.absolute().parent.parent / "software-agent-sdk"
+        if not sdk_src.exists():
+            raise FileNotFoundError(
+                f"OpenHands SDK source not found at {sdk_src}. "
+                "Expected ../software-agent-sdk/ relative to the e2e project root."
+            )
+        exec_run(container_id, "mkdir -p /opt/software-agent-sdk", "Preparing SDK dir", verbose=False)
+        copy_to_container(container_id, sdk_src / "openhands-sdk", "/opt/software-agent-sdk/openhands-sdk")
+        copy_to_container(container_id, sdk_src / "openhands-tools", "/opt/software-agent-sdk/openhands-tools")
+        copy_to_container(container_id, scripts_dir / "run_sdk_agent.py", "/opt/software-agent-sdk/run_sdk_agent.py")
+        copy_to_container(container_id, scripts_dir / "install_openhands_sdk.sh", "/install_openhands_sdk.sh")
+        code, _, stderr = exec_run(
+            container_id, "bash -eux /install_openhands_sdk.sh",
+            "Installing OpenHands SDK", timeout=1800
+        )
+        if code != 0:
+            raise Exception(f"Failed to install OpenHands SDK: {stderr[-500:]}")
 
     elif agent_id == "opencode":
         if not scripts_dir:
@@ -772,6 +797,65 @@ EOF''',
     return code
 
 
+def _execute_openhands_sdk(container_id, prompt, args):
+    """Execute OpenHands SDK agent and return exit code and output.
+
+    Args:
+        container_id: Docker container ID (already set up with workspace)
+        prompt: Prompt string for the agent
+        args: Command line arguments
+
+    Returns:
+        tuple: (exit_code, stdout, stderr)
+    """
+    # Write prompt to a file inside the container (avoids shell escaping issues)
+    exec_run(
+        container_id,
+        f"cat > /opt/prompt.txt << 'PROMPT_EOF'\n{prompt}\nPROMPT_EOF",
+        "Writing prompt", verbose=False,
+    )
+
+    env, _ = get_llm_env(
+        model_provider=args.model_provider,
+        litellm_model_id=args.litellm_model_id,
+        bedrock_model_id=args.bedrock_model_id,
+        anthropic_model_id=args.anthropic_model_id,
+        aws_region=args.aws_region,
+        aws_profile=args.aws_profile,
+    )
+
+    # Route through bridge if set
+    if args.model_provider == "anthropic":
+        base_url = os.environ.get("ANTHROPIC_BASE_URL")
+        if base_url:
+            env["LLM_BASE_URL"] = base_url
+            env["ANTHROPIC_BASE_URL"] = base_url
+            if not env.get("LLM_MODEL", "").startswith("anthropic/"):
+                env["LLM_MODEL"] = "anthropic/" + env.get("LLM_MODEL", "")
+            auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
+            if auth_token:
+                env["ANTHROPIC_AUTH_TOKEN"] = auth_token
+
+    exec_run(container_id, "mkdir -p /agent_trajectory", "Preparing trajectory dir", verbose=False)
+
+    code, stdout, stderr = exec_run(
+        container_id,
+        "/opt/sdk-venv/bin/python /opt/run_sdk_agent.py",
+        "Running agent",
+        timeout=args.timeout,
+        env=env,
+    )
+
+    if stdout:
+        print("\n--- Agent stdout ---")
+        print(stdout)
+    if stderr:
+        print("\n--- Agent stderr ---")
+        print(stderr)
+
+    return code, stdout, stderr
+
+
 def _execute_opencode(container_id, prompt, output_file, args):
     """Execute the OpenCode agent (headless) and return exit code.
 
@@ -889,11 +973,21 @@ def run_agent(args, config, script_path, data_path, prompt, attempt, work_dir, t
         
         if args.agent == "claude-code":
             if args.model_provider == "bedrock":
-                aws_creds = get_aws_credentials(args.aws_profile)
                 env_vars["CLAUDE_CODE_USE_BEDROCK"] = "1"
                 env_vars["AWS_REGION"] = args.aws_region
                 env_vars["ANTHROPIC_MODEL"] = args.bedrock_model_id
-                env_vars.update(aws_creds)
+                bearer = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+                if bearer:
+                    env_vars["AWS_BEARER_TOKEN_BEDROCK"] = bearer
+                    print("  Using Bedrock API key (bearer token)")
+                else:
+                    aws_creds = get_aws_credentials(args.aws_profile)
+                    if not aws_creds:
+                        raise RuntimeError(
+                            "bedrock requires either AWS_BEARER_TOKEN_BEDROCK (API key) "
+                            "in the environment, or resolvable AWS profile credentials")
+                    env_vars.update(aws_creds)
+                    print(f"  Using AWS SigV4 credentials (profile: {args.aws_profile or 'default'})")
             elif args.model_provider == "anthropic":
                 api_key = os.environ.get("ANTHROPIC_API_KEY")
                 if not api_key:
@@ -912,12 +1006,15 @@ def run_agent(args, config, script_path, data_path, prompt, attempt, work_dir, t
             else:
                 raise RuntimeError(f"claude-code does not support --model-provider {args.model_provider}")
         
-        # Start container with unified function
+        # Start container with unified function. When routing through the Claude
+        # Code subscription bridge, map host.docker.internal so the in-container
+        # agent can reach the bridge on the host loopback.
         container_id = start_container(
             build_image,
             env_vars=env_vars if env_vars else None,
             container_name=container_name,
-            workdir="/src"
+            workdir="/src",
+            add_host_gateway=getattr(args, "claude_subscription", False),
         )
         
         print(f"  Container: {container_id[:12]}")
@@ -940,6 +1037,20 @@ def run_agent(args, config, script_path, data_path, prompt, attempt, work_dir, t
             exit_code = _execute_gemini_cli(container_id, prompt, str(log_file), args)
         elif args.agent == "opencode":
             exit_code = _execute_opencode(container_id, prompt, str(log_file), args)
+        elif args.agent == "openhands-sdk":
+            exit_code, stdout, stderr = _execute_openhands_sdk(container_id, prompt, args)
+            with open(str(log_file), "w") as f:
+                if stdout:
+                    f.write(stdout)
+                if stderr:
+                    f.write("\n--- stderr ---\n")
+                    f.write(stderr)
+            traj_copy = subprocess.run(
+                ["docker", "cp", f"{container_id}:/agent_trajectory/.", str(trajectory_dir)],
+                capture_output=True, text=True
+            )
+            if traj_copy.returncode != 0:
+                print(f"  Warning: could not copy SDK trajectory: {traj_copy.stderr.strip()}")
         else:  # openhands
             exit_code, stdout, stderr = _execute_openhands(container_id, prompt, args)
             # Persist OpenHands' stdout/stderr as the attempt trajectory — unlike
@@ -1150,6 +1261,60 @@ def run_agent_loop(args, config, script_path, data_path, run_dir):
 
 
 # =============================================================================
+# Claude Code subscription bridge
+# =============================================================================
+
+def start_claude_subscription_bridge(args):
+    """Start the host-side Claude Code OAuth bridge and point the agent at it.
+
+    The bridge (scripts/claude_oauth) is an Anthropic-compatible proxy that runs
+    on the host and swaps a stub API key for the host's Claude Code *subscription*
+    OAuth token (Keychain / ~/.claude/.credentials.json), so trajectory
+    generation bills against the Max/Pro plan instead of a metered API key.
+
+    Because the agent runs inside a Docker container, the bridge listens on the
+    host and the container reaches it via host.docker.internal. We export the
+    bridge URL + shared secret into the environment so the existing
+    ANTHROPIC_BASE_URL / ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN hooks (in
+    run_agent() for claude-code and _execute_openhands() for openhands) forward
+    them into the container automatically.
+
+    Returns the running ClaudeOAuthBridge (call .stop() when done), or raises
+    with an actionable message if creds/deps are missing.
+    """
+    # Import here so a normal run without --claude-subscription never needs
+    # fastapi/uvicorn (only the bridge subprocess does).
+    sys.path.insert(0, str(Path(__file__).parent.absolute()))
+    try:
+        from claude_oauth import ClaudeOAuthBridge
+    except Exception as e:  # noqa: BLE001
+        raise RuntimeError(
+            f"Could not import the vendored Claude bridge (scripts/claude_oauth): {e}. "
+            "Install host deps with: bash scripts/install_bridge_deps.sh"
+        )
+
+    if args.model_provider != "anthropic":
+        print(f"  [bridge] forcing --model-provider anthropic (was {args.model_provider})")
+        args.model_provider = "anthropic"
+
+    bridge = ClaudeOAuthBridge(
+        port=args.cc_bridge_port,
+        bridge_secret=args.cc_bridge_secret,
+    )
+    print("  [bridge] starting Claude Code subscription bridge on the host...")
+    bridge.start()  # preflights creds, blocks until /healthz is green
+
+    # Route both backends through the bridge. litellm (openhands) and the claude
+    # CLI both authenticate with the stub secret; the bridge injects the real
+    # OAuth bearer upstream.
+    os.environ["ANTHROPIC_BASE_URL"] = bridge.container_base_url
+    os.environ["ANTHROPIC_API_KEY"] = bridge.stub_api_key
+    os.environ["ANTHROPIC_AUTH_TOKEN"] = bridge.stub_api_key
+    print(f"  [bridge] ready: ANTHROPIC_BASE_URL={bridge.container_base_url}")
+    return bridge
+
+
+# =============================================================================
 # Main entry point
 # =============================================================================
 
@@ -1174,7 +1339,7 @@ Examples:
     parser.add_argument("task_path", help="Task path (e.g., curl/arvo_66012)")
 
     # Agent selection
-    parser.add_argument("--agent", choices=["claude-code", "openhands", "codex", "gemini-cli", "opencode"], default="claude-code",
+    parser.add_argument("--agent", choices=["claude-code", "openhands", "openhands-sdk", "codex", "gemini-cli", "opencode"], default="claude-code",
                         help="Agent backend to use (default: claude-code)")
     parser.add_argument("--prompt-style", choices=["iterative", "no-test"], default="iterative",
                         help="Prompt style: iterative (can test) or no-test (default: iterative)")
@@ -1205,10 +1370,23 @@ Examples:
     parser.add_argument("--aws-region", default="us-west-2")
     parser.add_argument("--aws-profile", default=None)
 
+    # Claude Code subscription bridge (bill against a Max/Pro OAuth token instead
+    # of a metered API key). Works with --agent claude-code and --agent openhands.
+    parser.add_argument("--claude-subscription", action="store_true",
+                        help="Route the agent through the host Claude Code OAuth bridge "
+                             "(scripts/claude_oauth) using your Max/Pro subscription. "
+                             "Forces --model-provider anthropic. Requires `claude` login on "
+                             "the host and `bash scripts/install_bridge_deps.sh`.")
+    parser.add_argument("--cc-bridge-port", type=int, default=None,
+                        help="Fixed host port for the bridge (default: ephemeral free port).")
+    parser.add_argument("--cc-bridge-secret", default=None,
+                        help="Pin the bridge shared secret (default: random per run; "
+                             "also settable via GOKU_CC_BRIDGE_SECRET).")
+
     args = parser.parse_args()
 
     # Warn if using iterative prompt with OpenHands
-    if args.agent == "openhands" and args.prompt_style == "iterative":
+    if args.agent in ("openhands", "openhands-sdk") and args.prompt_style == "iterative":
         print("WARNING: Using iterative prompt with OpenHands. Agent will try to test but may fail.")
         print("         Consider using --prompt-style no-test for OpenHands.")
 
@@ -1228,6 +1406,12 @@ Examples:
         os.environ["OPENAI_BASE_URL"] = os.getenv("LITELLM_BASE_URL")
         os.environ["OPENAI_API_KEY"] = generated_api_key
         os.environ["GOOGLE_GEMINI_BASE_URL"] = os.getenv("LITELLM_BASE_URL")
+
+    # Claude Code subscription bridge (host-side). Start before get_llm_env so
+    # the forced anthropic provider is reflected in the model banner below.
+    claude_bridge = None
+    if args.claude_subscription:
+        claude_bridge = start_claude_subscription_bridge(args)
 
     _, llm_model = get_llm_env(
         model_provider=args.model_provider,
@@ -1257,7 +1441,11 @@ Examples:
     data_path = Path(args.data_dir) / args.task_path
 
     # Run agent
-    final_status, all_attempts = run_agent_loop(args, config, script_path, data_path, run_dir)
+    try:
+        final_status, all_attempts = run_agent_loop(args, config, script_path, data_path, run_dir)
+    finally:
+        if claude_bridge is not None:
+            claude_bridge.stop()
 
     # Save summary
     duration = time.time() - start_time
