@@ -65,6 +65,7 @@ Output:
 """
 
 import argparse
+import atexit
 import json
 import os
 import re
@@ -656,6 +657,45 @@ def save_attempt_scores(run_dir, attempt, pytest_data, rubric_data):
     return avg_score
 
 
+def start_claude_subscription_bridge(args):
+    """Start the host-side Claude Code OAuth bridge and point the agent at it.
+
+    The bridge (scripts/claude_oauth) is an Anthropic-compatible proxy that runs
+    on the host and swaps a stub API key for the host's Claude Code subscription
+    OAuth token, so trajectory generation bills against the Max/Pro plan instead
+    of a metered API key.
+
+    Returns the running ClaudeOAuthBridge (call .stop() when done), or raises
+    with an actionable message if creds/deps are missing.
+    """
+    scripts_dir = Path(__file__).parent / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        from claude_oauth import ClaudeOAuthBridge
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not import the vendored Claude bridge (scripts/claude_oauth): {e}. "
+            "Install host deps with: bash scripts/install_bridge_deps.sh"
+        ) from e
+
+    if args.model_provider != "anthropic":
+        print(f"  [bridge] forcing --model-provider anthropic (was {args.model_provider})")
+        args.model_provider = "anthropic"
+
+    bridge = ClaudeOAuthBridge(
+        port=args.cc_bridge_port,
+        bridge_secret=args.cc_bridge_secret,
+    )
+    print("  [bridge] starting Claude Code subscription bridge on the host...")
+    bridge.start()
+
+    os.environ["ANTHROPIC_BASE_URL"] = bridge.container_base_url
+    os.environ["ANTHROPIC_API_KEY"] = bridge.stub_api_key
+    os.environ["ANTHROPIC_AUTH_TOKEN"] = bridge.stub_api_key
+    print(f"  [bridge] ready: ANTHROPIC_BASE_URL={bridge.container_base_url}")
+    return bridge
+
+
 def main():
     ap = argparse.ArgumentParser(description="Run a Harbor-formatted CyberGym task (weighted scoring)")
     ap.add_argument("task_dir", help="Path to Harbor task directory (e.g. tasks/harfbuzz__arvo_62774)")
@@ -668,6 +708,14 @@ def main():
     ap.add_argument("--aws-region", default="us-west-2")
     ap.add_argument("--output-dir", default=None,
                     help="Output directory (default: agent_output/<task>/<timestamp>)")
+    ap.add_argument("--claude-subscription", action="store_true",
+                    help="Route the agent through the host Claude Code OAuth bridge "
+                         "(scripts/claude_oauth) using your Max/Pro subscription. "
+                         "Forces --model-provider anthropic.")
+    ap.add_argument("--cc-bridge-port", type=int, default=None,
+                    help="Fixed host port for the bridge (default: ephemeral free port).")
+    ap.add_argument("--cc-bridge-secret", default=None,
+                    help="Pin the bridge shared secret (default: random per run).")
     args = ap.parse_args()
 
     task_dir = Path(args.task_dir).resolve()
@@ -678,6 +726,10 @@ def main():
 
     task_name = task_dir.name
     instruction = (task_dir / "instruction.md").read_text()
+
+    claude_bridge = None
+    if args.claude_subscription:
+        claude_bridge = start_claude_subscription_bridge(args)
 
     llm_env, llm_model = get_llm_env(args)
 
@@ -711,6 +763,12 @@ def main():
     all_attempts = []
     feedback = ""
     best_reward = -1.0
+
+    def _stop_bridge():
+        if claude_bridge is not None:
+            claude_bridge.stop()
+
+    atexit.register(_stop_bridge)
 
     for attempt in range(1, args.max_attempts + 1):
         print(f"\n{'=' * 60}")

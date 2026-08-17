@@ -84,6 +84,22 @@ python run_harbor.py tasks/irssi__arvo_31491 \
     --agent claude-code --timeout 3600
 ```
 
+```bash
+# Claude Code + Claude Max/Pro subscription (OAuth bridge)
+python run_harbor.py tasks/harfbuzz__arvo_62774 \
+    --claude-subscription --cc-bridge-port 3456
+
+# Claude Code + subscription + specific model
+python run_harbor.py tasks/harfbuzz__arvo_62774 \
+    --claude-subscription --cc-bridge-port 3456 \
+    --anthropic-model-id claude-opus-4-6
+
+# Claude Code + subscription + pinned bridge secret
+python run_harbor.py tasks/harfbuzz__arvo_62774 \
+    --claude-subscription --cc-bridge-port 3456 \
+    --cc-bridge-secret my-secret
+```
+
 **Options:**
 
 | Flag | Default | Description |
@@ -97,6 +113,9 @@ python run_harbor.py tasks/irssi__arvo_31491 \
 | `--bedrock-model-id` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID |
 | `--aws-region` | `us-west-2` | AWS region for Bedrock |
 | `--output-dir` | `agent_output/<task>/<timestamp>_e2e` | Custom output directory |
+| `--claude-subscription` | off | Route through the Claude Code OAuth bridge using your Max/Pro subscription (forces `--model-provider anthropic`) |
+| `--cc-bridge-port` | ephemeral | Fixed host port for the OAuth bridge |
+| `--cc-bridge-secret` | random | Pin the bridge shared secret (default: random per run) |
 
 **Environment variables:**
 
@@ -109,6 +128,23 @@ python run_harbor.py tasks/irssi__arvo_31491 \
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials for Bedrock |
 | `AWS_SESSION_TOKEN` | AWS session token for Bedrock |
 | `AWS_BEARER_TOKEN_BEDROCK` | Bearer token for Bedrock |
+
+### Claude Max/Pro Subscription Mode
+
+The `--claude-subscription` flag auto-starts the Claude Code OAuth bridge (`scripts/claude_oauth`), a local proxy that routes Anthropic API requests through your Claude Max/Pro subscription instead of a metered API key. This is useful for running evaluations without API billing.
+
+**Prerequisites:**
+- Log in with the `claude` CLI on the host first (the bridge reads OAuth tokens from `~/.claude/.credentials.json` or macOS Keychain)
+- Install bridge dependencies: `bash scripts/install_bridge_deps.sh`
+
+**How it works:**
+1. The bridge starts on the host as a FastAPI proxy (bound to `127.0.0.1:<port>`)
+2. A random shared secret is generated (or pinned via `--cc-bridge-secret`)
+3. `ANTHROPIC_BASE_URL` and `ANTHROPIC_API_KEY` are set to point the in-container agent at the bridge
+4. The bridge swaps the stub API key for the real OAuth bearer token before forwarding to `api.anthropic.com`
+5. Docker containers reach the host bridge via `host.docker.internal`
+
+The bridge automatically kills any stale bridge process on the same port from a previous run.
 
 ### Legacy Runner
 

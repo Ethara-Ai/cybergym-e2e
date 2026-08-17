@@ -1,0 +1,80 @@
+{
+    "schema_version": 1,
+    "created_at": "2026-08-17T07:16:20.929575Z",
+    "harbor": {
+        "version": "0.13.2",
+        "is_editable": false
+    },
+    "invocation": [
+        "/Users/apple/.local/bin/harbor",
+        "run",
+        "-p",
+        "/Users/apple/Desktop/Harness/project/cybergym-e2e/tasks",
+        "-i",
+        "irssi__arvo_31491",
+        "--agent",
+        "claude-code",
+        "--model",
+        "anthropic/claude-opus-4-6",
+        "-n",
+        "1",
+        "--ae",
+        "ANTHROPIC_BASE_URL=http://host.docker.internal:8787",
+        "--ae",
+        "ANTHROPIC_API_KEY=harb****est"
+    ],
+    "n_concurrent_trials": 1,
+    "retry": {
+        "max_retries": 0,
+        "exclude_exceptions": [
+            "VerifierOutputParseError",
+            "RewardFileNotFoundError",
+            "VerifierTimeoutError",
+            "RewardFileEmptyError",
+            "AgentTimeoutError"
+        ],
+        "wait_multiplier": 1.0,
+        "min_wait_sec": 1.0,
+        "max_wait_sec": 60.0
+    },
+    "trials": [
+        {
+            "task": {
+                "name": "irssi__arvo_31491",
+                "type": "local",
+                "digest": "sha256:299e39d5de55a68ce2750984f87d131bc03f3e1963569f0e0931f10e1ad2881e",
+                "source": "tasks",
+                "path": "/Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/irssi__arvo_31491"
+            },
+            "timeout_multiplier": 1.0,
+            "agent": {
+                "name": "claude-code",
+                "model_name": "anthropic/claude-opus-4-6",
+                "skills": [],
+                "extra_allowed_hosts": [],
+                "kwargs": {},
+                "env": {
+                    "ANTHROPIC_BASE_URL": "http://host.docker.internal:8787",
+                    "ANTHROPIC_API_KEY": "harb****est"
+                },
+                "mcp_servers": []
+            },
+            "skills": [],
+            "environment": {
+                "type": "docker",
+                "force_build": false,
+                "delete": true,
+                "cpu_enforcement_policy": "auto",
+                "memory_enforcement_policy": "auto",
+                "extra_docker_compose": [],
+                "env": {},
+                "kwargs": {},
+                "extra_allowed_hosts": []
+            },
+            "verifier": {
+                "env": {},
+                "disable": false
+            }
+        }
+    ]
+}

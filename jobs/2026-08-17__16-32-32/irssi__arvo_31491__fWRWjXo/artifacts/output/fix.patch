@@ -1,0 +1,13 @@
+--- a/src/irc/core/irc.c
++++ b/src/irc/core/irc.c
+@@ -393,6 +393,10 @@ static void unescape_tag(char *tag)
+ 	for (; *tmp != '\0'; tmp++, tag++) {
+ 		if (*tmp == '\\') {
+ 			tmp++;
++			if (*tmp == '\0') {
++				*tag = '\\';
++				break;
++			}
+ 			switch (*tmp) {
+ 			case ':':
+ 				*tag = ';';

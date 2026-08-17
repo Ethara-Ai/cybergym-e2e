@@ -136,7 +136,7 @@ def convert(task, mode, src_repo, data_root, out_root, agent_timeout, verifier_t
             "# vulnerable snapshot below is the only source present (mirrors setup_workspace).\n"
             "RUN find /src -mindepth 1 -maxdepth 1 ! -name honggfuzz ! -name libfuzzer "
             "! -name afl ! -name aflplusplus ! -name fuzztest -exec rm -rf {} + 2>/dev/null || true\n"
-            "RUN rm -rf /out /work /usr/bin/arvo && mkdir -p /out /work\n"
+            "RUN rm -rf /out /work /bin/arvo /usr/bin/arvo /tmp/poc && mkdir -p /out /work\n"
         )
 
     patchonly_copy = ""

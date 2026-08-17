@@ -168,7 +168,7 @@ def setup_workspace(container_id, data_path, script_path, mode="e2e", copy_gt_po
             verbose=False,
             check=True,
         )
-        exec_run(container_id, "rm -rf /out /work /usr/bin/arvo", workdir="/", verbose=False, check=True)
+        exec_run(container_id, "rm -rf /out /work /bin/arvo /usr/bin/arvo /tmp/poc", workdir="/", verbose=False, check=True)
         exec_run(container_id, "mkdir -p /out /work", workdir="/", verbose=False, check=True)
 
     # Create directories

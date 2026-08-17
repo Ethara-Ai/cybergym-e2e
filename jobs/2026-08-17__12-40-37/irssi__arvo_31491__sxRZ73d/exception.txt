@@ -1,0 +1,44 @@
+Traceback (most recent call last):
+  File "/Users/apple/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 295, in run
+    await self._prepare()
+  File "/Users/apple/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 326, in _prepare
+    await self._setup_agent()
+  File "/Users/apple/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 1010, in _setup_agent
+    await asyncio.wait_for(
+    ...<2 lines>...
+    )
+  File "/Users/apple/.local/share/uv/python/cpython-3.13.13-macos-aarch64-none/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/Users/apple/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py", line 439, in setup
+    await self.install(environment)
+  File "/Users/apple/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/claude_code.py", line 152, in install
+    await self.exec_as_root(
+    ...<13 lines>...
+    )
+  File "/Users/apple/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py", line 399, in exec_as_root
+    return await self._exec(
+           ^^^^^^^^^^^^^^^^^
+        environment, command, user="root", env=env, cwd=cwd, timeout_sec=timeout_sec
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/Users/apple/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/installed/base.py", line 379, in _exec
+    raise self._classify_exec_error(command, result)
+harbor.agents.installed.base.NonZeroAgentExitCodeError: Command failed (exit 100): if command -v apk &> /dev/null; then  apk add --no-cache curl bash nodejs npm procps; elif command -v apt-get &> /dev/null; then  apt-get update && apt-get install -y curl procps; elif command -v yum &> /dev/null; then  yum install -y curl procps-ng; else  echo "Warning: No known package manager found, assuming curl is available" >&2; fi
+stdout: Err:1 http://ports.ubuntu.com/ubuntu-ports focal InRelease
+  Temporary failure resolving 'ports.ubuntu.com'
+Err:2 http://ppa.launchpad.net/git-core/ppa/ubuntu focal InRelease
+  Temporary failure resolving 'ppa.launchpad.net'
+Err:3 http://ports.ubuntu.com/ubuntu-ports focal-updates InRelease
+  Temporary failure resolving 'ports.ubuntu.com'
+Err:4 http://ports.ubuntu.com/ubuntu-ports focal-backports InRelease
+  Temporary failure resolving 'ports.ubuntu.com'
+Err:5 http://ports.ubuntu.com/ubuntu-ports focal-security InRelease
+  Temporary failure resolving 'ports.ubuntu.com'
+Reading package lists...
+W: Failed to fetch http://ports.ubuntu.com/ubuntu-ports/dists/focal/InRelease  Temporary failure resolving 'ports.ubuntu.com'
+W: Failed to fetch http://ports.ubuntu.com/ubuntu-ports/dists/focal-updates/InRelease  Temporary failure resolving 'ports.ubuntu.com'
+W: Failed to fetch http://ports.ubuntu.com/ubuntu-ports/dists/focal-backports/InRelease  Temporary failure resolving 'ports.ubuntu.com'
+W:  ... [truncated]
+stderr: None

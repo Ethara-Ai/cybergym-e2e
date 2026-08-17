@@ -1,0 +1,43 @@
+{
+    "id": "0580181a-c71e-46a5-b334-e7641a0a9314",
+    "started_at": "2026-08-17T15:01:26.435150",
+    "updated_at": "2026-08-17T15:04:14.903829",
+    "finished_at": "2026-08-17T15:04:14.903829",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 1,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "claude-code__claude-opus-4-6__tasks": {
+                "n_trials": 1,
+                "n_errors": 1,
+                "metrics": [
+                    {
+                        "mean": -0.08771929824561403
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "-0.08771929824561403": [
+                            "irssi__arvo_31491__GPZQyHD"
+                        ]
+                    }
+                },
+                "exception_stats": {
+                    "NonZeroAgentExitCodeError": [
+                        "irssi__arvo_31491__GPZQyHD"
+                    ]
+                }
+            }
+        },
+        "n_input_tokens": 0,
+        "n_cache_tokens": 0,
+        "n_output_tokens": 0,
+        "cost_usd": 0.0
+    }
+}

@@ -138,8 +138,30 @@ class ClaudeOAuthBridge:
         env["WCB_CC_BRIDGE_SECRET"] = self.bridge_secret
         return env
 
+    def _kill_stale_on_port(self) -> None:
+        """Kill any leftover bridge process occupying our port."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                s.connect((self.host, self.port))
+        except OSError:
+            return  # port is free
+        logger.warning("Port %d is already in use — killing stale process", self.port)
+        result = subprocess.run(
+            ["lsof", "-ti", f"tcp:{self.port}"],
+            capture_output=True, text=True, timeout=5,
+        )
+        for pid_str in result.stdout.strip().split():
+            pid = int(pid_str)
+            if pid == os.getpid():
+                continue
+            logger.warning("Killing stale PID %d on port %d", pid, self.port)
+            os.kill(pid, 15)  # SIGTERM
+        time.sleep(0.5)
+
     def start(self) -> "ClaudeOAuthBridge":
         self.preflight()
+        self._kill_stale_on_port()
         env = self._subprocess_env()
         logger.info(
             "Starting Claude Code OAuth bridge on %s (container URL: %s)",
@@ -181,6 +203,14 @@ class ClaudeOAuthBridge:
             try:
                 r = httpx.get(health_url, timeout=2.0)
                 if r.status_code == 200:
+                    # Verify it's OUR process that responded, not a stale one
+                    time.sleep(0.2)
+                    if self._proc and self._proc.poll() is not None:
+                        out = self._proc.stdout.read() if self._proc.stdout else ""
+                        raise RuntimeError(
+                            f"Bridge subprocess died after health check passed "
+                            f"(stale bridge on port {self.port}?):\n{out}"
+                        )
                     logger.info("Claude Code OAuth bridge ready at %s", self.base_url)
                     return
             except Exception as exc:  # noqa: BLE001 — connection refused while booting
