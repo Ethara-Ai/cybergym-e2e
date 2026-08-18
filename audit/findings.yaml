@@ -1,0 +1,288 @@
+schema_version: 1
+scoped_at: "2026-08-18T16:00:00Z"
+disposition: HOLD
+
+findings:
+
+  - id: F-001
+    title: network policy not enforced by runner
+    class: 2
+    severity: HIGH
+    category: trust_boundary
+    evidence: CHK-014
+    description: >
+      The run_harbor.py runner never reads allow_internet from task.toml
+      and never applies --network=none or any Docker network restriction.
+      All 10 task containers have unrestricted network access regardless
+      of the allow_internet=false setting in 9 of 10 task.toml files.
+      An agent can use the network to look up known vulnerability fixes,
+      defeating the benchmark's purpose.
+    location: run_harbor.py start_container() lines 148-159
+    disposition_impact: HOLD
+
+  - id: F-002
+    title: 8 of 10 Docker images use unpinned mutable tags
+    class: 5
+    severity: HIGH
+    category: supply_chain
+    evidence: CHK-001
+    description: >
+      Eight task Dockerfiles reference Docker Hub images by mutable tag
+      (n132/arvo:*-fix, cybergym/e2e:quickjs) without @sha256: digest pins.
+      These images can be replaced on Docker Hub at any time, changing
+      the build environment without any record. The n132/ namespace is a
+      third-party Docker Hub user account with no verified publisher status.
+    affected:
+      - espeak-ng__OSV-2023-984
+      - exiv2__arvo_45993
+      - ghostscript__arvo_44406
+      - harfbuzz__arvo_62774
+      - hdf5__arvo_58701
+      - opensc__arvo_64898
+      - pcapplusplus__arvo_43408
+      - quickjs__oss-fuzz_416298149
+    disposition_impact: HOLD
+
+  - id: F-003
+    title: espeak-ng task uses wrong base image tag
+    class: 11
+    severity: MEDIUM
+    category: delivery_integrity
+    evidence: CHK-002
+    description: >
+      The espeak-ng__OSV-2023-984 Dockerfile uses FROM n132/arvo:62774-fix,
+      which is the harfbuzz image. A comment documents this as intentional
+      reuse, but it creates an undeclared dependency on harfbuzz build
+      artifacts and means the espeak-ng environment is not independently
+      reproducible from its Dockerfile alone.
+    location: tasks/espeak-ng__OSV-2023-984/environment/Dockerfile line 5
+    disposition_impact: none
+
+  - id: F-004
+    title: containers run as root with no user isolation
+    class: 1
+    severity: MEDIUM
+    category: container_security
+    evidence: CHK-004
+    description: >
+      No Dockerfile contains a USER directive. All containers run the agent
+      as root. The runner's install_claude_code() creates an 'agent' user
+      but this is not enforced at the Docker level. Root access means the
+      agent can modify any file in the container including build scripts,
+      test scripts, and system binaries.
+    location: all 10 environment Dockerfiles
+    disposition_impact: none
+
+  - id: F-005
+    title: rubric judge lacks reliability discipline
+    class: 6
+    severity: HIGH
+    category: scoring_integrity
+    evidence: CHK-010
+    description: >
+      The evaluate_rubric() function in run_harbor.py makes a single LLM
+      judge call with no position randomization, no conformal prediction
+      sets, no perturbation suite, and no multi-trial aggregation. The
+      rubric_score contributes 50% of the final reward. A single judge
+      call is unreliable, and the function silently returns None on any
+      failure, which causes rubric_score to default to 0.0 without any
+      error signal in the final reward.
+    location: run_harbor.py lines 663-776
+    disposition_impact: HOLD
+
+  - id: F-006
+    title: irssi task allows internet access
+    class: 6
+    severity: MEDIUM
+    category: task_consistency
+    evidence: CHK-005
+    description: >
+      The irssi__arvo_31491 task.toml sets allow_internet=true while all
+      other 9 tasks set allow_internet=false. Combined with F-001 (network
+      policy not enforced), this means irssi explicitly permits network
+      access. For a vulnerability discovery benchmark, this could allow
+      the agent to look up the known fix for arvo:31491.
+    location: tasks/irssi__arvo_31491/task.toml
+    disposition_impact: none
+
+  - id: F-007
+    title: duplicate placeholder PoC across tasks
+    class: 6
+    severity: MEDIUM
+    category: ground_truth_integrity
+    evidence: CHK-007
+    description: >
+      The pcapplusplus__arvo_43408 and hdf5__arvo_58701 tasks share an
+      identical 20-byte all-zeros PoC file. This is a placeholder, not
+      a genuine exploit input. A null-byte PoC may not reliably trigger
+      the intended vulnerability, undermining stage 4 validation for
+      these tasks.
+    hash: de47c9b27eb8d300dbb5f2c353e632c393262cf06340c4fa7f1b40c4cbd36f90
+    disposition_impact: none
+
+  - id: F-008
+    title: irssi task name has inconsistent prefix
+    class: 11
+    severity: LOW
+    category: delivery_conformance
+    evidence: CHK-006
+    description: >
+      The irssi task declares its name as "cybergym-e2e/irssi__arvo_31491"
+      in task.toml while all other 9 tasks use the bare name without a
+      prefix. This inconsistency may cause downstream tooling, reporting,
+      or aggregation issues.
+    location: tasks/irssi__arvo_31491/task.toml line 5
+    disposition_impact: none
+
+  - id: F-009
+    title: negative-weight network detection is string-based only
+    class: 6
+    severity: MEDIUM
+    category: scoring_integrity
+    evidence: CHK-015
+    description: >
+      The test_negative_weight_uses_network check in test_output.py only
+      searches for string patterns like "downloaded", "fetched from",
+      "http://", "https://" in the agent's output files. An agent can
+      use curl, wget, or any network tool without leaving these specific
+      strings in its PoC or patch, completely evading detection.
+    location: tests/*/test_output.py test_negative_weight_uses_network()
+    disposition_impact: none
+
+  - id: F-010
+    title: shell injection via subprocess with shell=True
+    class: 1
+    severity: MEDIUM
+    category: code_injection
+    evidence: code review
+    description: >
+      The test_output.py verifier uses subprocess.run with shell=True and
+      f-string interpolation of file paths (e.g., f"sudo cp {poc_path} ...").
+      While these paths are typically controlled, a maliciously crafted file
+      path could inject shell commands. This affects _run_poc(), _compile(),
+      _apply_patch(), and _restore_src().
+    location: tasks/*/tests/test_output.py lines 88-141
+    disposition_impact: none
+
+  - id: F-011
+    title: git tree dirty with uncommitted harness changes
+    class: 6
+    severity: LOW
+    category: provenance
+    evidence: CHK-011
+    description: >
+      The run_harbor.py file has 228 insertions and 54 deletions that are
+      not committed. The live harness code used for scoring differs from
+      the version in the git history. This means the committed git SHA
+      does not represent the actual scoring behavior.
+    disposition_impact: none
+
+  - id: F-012
+    title: no provenance or signature files for ground truth
+    class: 6
+    severity: MEDIUM
+    category: provenance
+    evidence: CHK-012
+    description: >
+      No solution/ directory contains TRUTH.md, provenance.yaml,
+      provenance.sig, rubrics.json, or any machine-readable provenance
+      record. There is no signed binding between the ground-truth PoC,
+      the reference patch, the source snapshot, and the vulnerability
+      identifier. The authenticity and correctness of ground truth cannot
+      be independently verified.
+    disposition_impact: HOLD
+
+  - id: F-013
+    title: credential on disk in .env file
+    class: 3
+    severity: MEDIUM
+    category: secret_exposure
+    evidence: CHK-003
+    description: >
+      The .env file contains an AWS Bearer Token for Bedrock
+      (AWS_BEARER_TOKEN_BEDROCK) and a Bedrock model ARN. While .env is
+      gitignored and does not appear in git history, its presence on disk
+      is a credential exposure risk if the project directory is shared,
+      backed up, or accessed by other tools.
+    location: .env
+    disposition_impact: none
+
+  - id: F-014
+    title: validate.py available to agent reveals grading logic
+    class: 7
+    severity: LOW
+    category: information_disclosure
+    evidence: CHK-009
+    description: >
+      The identical validate.py is placed in both the agent environment
+      (at /scripts/validate.py) and the verifier (tests/validate.py).
+      This gives the agent full knowledge of the 4-stage grading logic
+      and the specific checks performed. This is documented as intentional
+      (for iterative self-testing per the paper methodology) but means
+      the agent knows exactly what the verifier checks.
+    disposition_impact: none
+
+  - id: F-015
+    title: irssi tests directory contains full environment rebuild
+    class: 11
+    severity: LOW
+    category: delivery_conformance
+    evidence: irssi tests/ listing
+    description: >
+      The irssi__arvo_31491 tests/ directory uniquely contains a
+      Dockerfile, src.tgz, config/, scripts/, and install_validate_deps.sh,
+      forming a complete environment rebuild. Other tasks' tests/ directories
+      contain only the verifier files (test.sh, test_output.py, etc.).
+      This structural inconsistency suggests irssi uses a different
+      verifier architecture.
+    location: tasks/irssi__arvo_31491/tests/
+    disposition_impact: none
+
+coverage_gaps:
+  - id: GAP-001
+    description: no crucible_view.yaml available
+    cap: HOLD
+
+  - id: GAP-002
+    description: no requirements files to bind
+    cap: HOLD
+
+  - id: GAP-003
+    description: no touchstones for reconciliation
+    cap: HOLD
+
+  - id: GAP-004
+    description: no provenance files in ground truth
+    cap: HOLD
+
+  - id: GAP-005
+    description: no samples/ directory for curated subset reconciliation
+    cap: HOLD
+
+  - id: GAP-006
+    description: dirty git tree
+    cap: HOLD
+
+  - id: GAP-007
+    description: unpinned Docker images
+    cap: HOLD
+
+  - id: GAP-008
+    description: no execution attestation
+    cap: HOLD
+
+  - id: GAP-009
+    description: no pinned scanner databases
+    cap: HOLD
+
+  - id: GAP-010
+    description: scope approval not yet signed
+    cap: HOLD
+
+  - id: GAP-011
+    description: no contamination screening roots available
+    cap: HOLD
+
+  - id: GAP-012
+    description: rubric judge reliability discipline not applied
+    cap: HOLD

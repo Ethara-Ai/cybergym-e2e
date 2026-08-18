@@ -1,0 +1,71 @@
+scoped_at: "2026-08-18T16:00:00Z"
+auditor: CRUCIBLE
+contract: trinity/CRUCIBLE.md
+contract_sha: 6757043b74cb7f76148983e979e491e7d943b555
+
+project:
+  git_sha: 1c388d465739ed3d5665bd8e3d0ef1f5f21acf6b
+  dirty: true
+
+task_bundles:
+  curl__arvo_66012:
+    solution_poc_sha256: "78b90d792822bef1bf1db8f92abec648da56ee9f"
+    solution_patch_present: true
+    provenance_file: absent
+    signature: absent
+
+  espeak-ng__OSV-2023-984:
+    solution_poc_sha256: "4d2379da2ec6a2150e01a9cb9dbede8d4c506504"
+    solution_patch_present: true
+    provenance_file: absent
+    signature: absent
+
+  exiv2__arvo_45993:
+    solution_poc_sha256: "7511a46f7dc6aa0da3fe01a8ed62be9f75e81233"
+    solution_patch_present: true
+    provenance_file: absent
+    signature: absent
+
+  ghostscript__arvo_44406:
+    solution_poc_sha256: "30571d73136a132c22ed56f0dfa76f35463155b9"
+    solution_patch_present: true
+    provenance_file: absent
+    signature: absent
+
+  harfbuzz__arvo_62774:
+    solution_poc_sha256: "c50933ee7cce4bfa783673ef2cbaf95267afb3c8"
+    solution_patch_present: true
+    provenance_file: absent
+    signature: absent
+
+  hdf5__arvo_58701:
+    solution_poc_sha256: "6768033e216468247bd031a0a2d9876d79818f8f"
+    solution_patch_present: true
+    provenance_file: absent
+    signature: absent
+    note: placeholder 20-byte null PoC
+
+  irssi__arvo_31491:
+    solution_poc_sha256: "c4b73c02b2e1d6a1d824c96890a9b15cb4a225d1"
+    solution_patch_present: true
+    provenance_file: absent
+    signature: absent
+
+  opensc__arvo_64898:
+    solution_poc_sha256: "26438d07ef75dffd84c4c74ef82057f959fe24aa"
+    solution_patch_present: true
+    provenance_file: absent
+    signature: absent
+
+  pcapplusplus__arvo_43408:
+    solution_poc_sha256: "6768033e216468247bd031a0a2d9876d79818f8f"
+    solution_patch_present: true
+    provenance_file: absent
+    signature: absent
+    note: placeholder 20-byte null PoC, identical hash to hdf5
+
+  quickjs__oss-fuzz_416298149:
+    solution_poc_sha256: "868460d98d09d8bbb93d7b6cdd15cc7fbec676b9"
+    solution_patch_present: true
+    provenance_file: absent
+    signature: absent

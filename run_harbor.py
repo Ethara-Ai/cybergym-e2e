@@ -110,10 +110,15 @@ def exec_run(cid, cmd, desc=None, timeout=1200, env=None, verbose=True):
     if env:
         for k, v in env.items():
             docker_cmd.extend(["-e", f"{k}={v}"])
-    docker_cmd.extend([cid, "timeout", str(timeout), "bash", "-c", cmd])
-    r = subprocess.run(docker_cmd, capture_output=True, text=True,
-                       timeout=timeout + 10, errors="replace")
-    return r.returncode, r.stdout, r.stderr
+    docker_cmd.extend([cid, "bash", "-c", cmd])
+    try:
+        r = subprocess.run(docker_cmd, capture_output=True, text=True,
+                           timeout=timeout, errors="replace")
+        return r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired as te:
+        out = (te.stdout or b"").decode("utf-8", errors="replace") if isinstance(te.stdout, bytes) else (te.stdout or "")
+        err = (te.stderr or b"").decode("utf-8", errors="replace") if isinstance(te.stderr, bytes) else (te.stderr or "")
+        return -1, out, err
 
 
 def copy_to(cid, src, dst):
@@ -224,14 +229,20 @@ def run_claude_code_agent(cid, prompt, llm_env, timeout):
             docker_cmd.extend(["-e", f"{k}={v}"])
     docker_cmd.extend(["-e", "HOME=/home/agent"])
     docker_cmd.extend([
-        cid, "timeout", str(timeout), "bash", "-c",
+        cid, "bash", "-c",
         'claude -p "$(cat /src/.prompt.txt)" '
         '--disallowedTools "WebFetch,WebSearch,Task,MCPSearch,NotebookEdit,Skill,AskUserQuestion" '
         '--output-format stream-json --verbose --dangerously-skip-permissions'
     ])
-    r = subprocess.run(docker_cmd, capture_output=True, text=True,
-                       timeout=timeout + 30, errors="replace")
-    code, stdout, stderr = r.returncode, r.stdout, r.stderr
+    try:
+        r = subprocess.run(docker_cmd, capture_output=True, text=True,
+                           timeout=timeout, errors="replace")
+        code, stdout, stderr = r.returncode, r.stdout, r.stderr
+    except subprocess.TimeoutExpired as te:
+        print(f"  Agent timed out after {timeout}s — collecting partial output")
+        stdout = (te.stdout or b"").decode("utf-8", errors="replace") if isinstance(te.stdout, bytes) else (te.stdout or "")
+        stderr = (te.stderr or b"").decode("utf-8", errors="replace") if isinstance(te.stderr, bytes) else (te.stderr or "")
+        code = -1
 
     if stdout:
         print(stdout[-2000:] if len(stdout) > 2000 else stdout)
@@ -347,6 +358,169 @@ def run_agent(cid, prompt, llm_env, timeout):
         lines = stderr.strip().split("\n")
         print("\n".join(lines[-20:]))
     return code, stdout, stderr
+
+
+def convert_jsonl_to_trajectory(log_path, output_path):
+    """Convert Claude Code JSONL session log to ATIF-v1.7 trajectory.json."""
+    try:
+        events = []
+        with open(log_path, "r", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+
+        if not events:
+            return
+
+        seen_uuids = set()
+        deduped = []
+        for ev in events:
+            uid = ev.get("uuid")
+            if uid and uid in seen_uuids:
+                continue
+            if uid:
+                seen_uuids.add(uid)
+            deduped.append(ev)
+        events = deduped
+
+        session_id = None
+        model_name = None
+        steps = []
+        step_id = 0
+        total_prompt = 0
+        total_completion = 0
+        total_cached = 0
+        pending_observations = []
+
+        for ev in events:
+            ev_type = ev.get("type", "")
+            subtype = ev.get("subtype", "")
+
+            if ev_type == "system" and subtype == "init":
+                session_id = ev.get("session_id")
+                model_name = ev.get("model")
+                continue
+
+            if ev_type == "user":
+                msg = ev.get("message", "")
+                content = []
+                if isinstance(msg, dict):
+                    content = msg.get("content", [])
+                elif isinstance(msg, str):
+                    content = [{"type": "text", "text": msg}]
+
+                tool_results = []
+                text_parts = []
+                for part in (content if isinstance(content, list) else []):
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "tool_result":
+                        c = part.get("content", "")
+                        tool_results.append({
+                            "source_call_id": part.get("tool_use_id", ""),
+                            "content": c if isinstance(c, str) else str(c)[:500],
+                        })
+                    elif part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+
+                if text_parts and not tool_results:
+                    step_id += 1
+                    steps.append({
+                        "step_id": step_id,
+                        "timestamp": ev.get("timestamp", ""),
+                        "source": "user",
+                        "message": "\n".join(text_parts),
+                    })
+                elif tool_results:
+                    pending_observations.extend(tool_results)
+                continue
+
+            if ev_type == "assistant":
+                msg = ev.get("message", "")
+                if not isinstance(msg, dict):
+                    continue
+
+                content_parts = msg.get("content", [])
+                text_parts = []
+                tool_calls = []
+                reasoning = None
+
+                for part in (content_parts if isinstance(content_parts, list) else []):
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") == "text":
+                        text_parts.append(part.get("text", ""))
+                    elif part.get("type") == "thinking":
+                        reasoning = part.get("thinking", "")
+                    elif part.get("type") == "tool_use":
+                        tool_calls.append({
+                            "tool_call_id": part.get("id", ""),
+                            "function_name": part.get("name", ""),
+                            "arguments": part.get("input", {}),
+                        })
+
+                usage = msg.get("usage", {})
+                prompt_tokens = usage.get("input_tokens", 0) or 0
+                completion_tokens = usage.get("output_tokens", 0) or 0
+                cached_tokens = usage.get("cache_read_input_tokens", 0) or 0
+                total_prompt += prompt_tokens
+                total_completion += completion_tokens
+                total_cached += cached_tokens
+
+                step_id += 1
+                step = {
+                    "step_id": step_id,
+                    "timestamp": ev.get("timestamp", ""),
+                    "source": "agent",
+                    "model_name": model_name or "",
+                    "message": "\n".join(text_parts),
+                }
+                if reasoning:
+                    step["reasoning_content"] = reasoning
+                if tool_calls:
+                    step["tool_calls"] = tool_calls
+                if pending_observations:
+                    step["observation"] = {"results": pending_observations}
+                    pending_observations = []
+                step["metrics"] = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "cached_tokens": cached_tokens,
+                }
+                steps.append(step)
+
+        if not steps:
+            return
+
+        trajectory = {
+            "schema_version": "ATIF-v1.7",
+            "session_id": session_id or "",
+            "agent": {
+                "name": "claude-code",
+                "version": "",
+                "model_name": model_name or "",
+            },
+            "steps": steps,
+            "final_metrics": {
+                "total_prompt_tokens": total_prompt,
+                "total_completion_tokens": total_completion,
+                "total_cached_tokens": total_cached,
+                "total_cost_usd": 0.0,
+                "total_steps": len(steps),
+            },
+        }
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(trajectory, f, indent=2, ensure_ascii=False)
+        print(f"  Wrote trajectory.json ({len(steps)} steps)")
+
+    except Exception as e:
+        print(f"  Warning: trajectory.json conversion failed: {e}")
 
 
 def run_verifier(image, task_dir, poc_path, patch_path):
@@ -594,6 +768,7 @@ Respond ONLY with the JSON array, no other text."""
             "total_positive": total_positive,
             "judge_model": judge_model,
             "criteria": details,
+            "judge_usage": resp.get("usage", {}),
         }
 
     except Exception as e:
@@ -716,6 +891,24 @@ def main():
                     help="Fixed host port for the bridge (default: ephemeral free port).")
     ap.add_argument("--cc-bridge-secret", default=None,
                     help="Pin the bridge shared secret (default: random per run).")
+
+    # --- Finance API (opt-in usage tracking, never affects scoring) ---
+    ap.add_argument("--finance-api-url", default=None,
+                    help="Odoo Finance API base URL for trajectory usage tracking. "
+                         "If omitted, no usage data is posted.")
+    ap.add_argument("--finance-project-id", default=None,
+                    help="Project ID for finance tracking (default: task name)")
+    ap.add_argument("--finance-budget-type", default="Production",
+                    help="Budget type: RFP or Production (default: Production)")
+    ap.add_argument("--finance-rfp-sub-type", default="",
+                    help="RFP sub-type (Testing/Sampling). Only when budget_type=RFP.")
+    ap.add_argument("--finance-production-mode", default="Singlephase",
+                    help="Production mode: Singlephase or Multiphase (default: Singlephase)")
+    ap.add_argument("--finance-team-type", default="Projects",
+                    help="Team type for finance tracking (default: Projects)")
+    ap.add_argument("--finance-subscription-id", default="",
+                    help="Subscription ID for finance billing attribution.")
+
     args = ap.parse_args()
 
     task_dir = Path(args.task_dir).resolve()
@@ -809,6 +1002,10 @@ def main():
 
             subprocess.run(["docker", "cp", f"{cid}:/agent_trajectory/.",
                             str(trajectory_dir)], capture_output=True)
+
+            if args.agent == "claude-code" and log_file.exists():
+                traj_json = trajectory_dir / f"trajectory_attempt_{attempt}.json"
+                convert_jsonl_to_trajectory(log_file, traj_json)
 
             poc_file = output_dir / f"poc_attempt_{attempt}.bin"
             patch_file = output_dir / f"fix_attempt_{attempt}.patch"
@@ -934,53 +1131,8 @@ def main():
     final_rubric = best.get("rubric_score", 0.0)
     final_avg = best.get("avg_score", final_pytest)
 
-    # File 1: pytest_score.json
-    stages_detail = {}
-    for s in ["stage1", "stage2", "stage3", "stage4"]:
-        stages_detail[s] = {
-            "status": best.get(s),
-            "description": STAGE_DESCRIPTIONS.get(s, ""),
-            "weight": STAGE_WEIGHTS.get(f"test_{s}_poc_crashes_without_patch" if s == "stage1"
-                else f"test_{s}_poc_ok_with_patch" if s in ("stage2", "stage4")
-                else f"test_{s}_tests_pass_with_patch", 0),
-        }
-    json.dump({
-        "pytest_score": round(final_pytest, 6),
-        "stages": {k: best.get(k) for k in ["stage1", "stage2", "stage3", "stage4"]},
-        "stages_detail": stages_detail,
-        "found_ground_truth_bug": best.get("gt_success", False),
-        "test_results": best.get("test_results", {}),
-    }, open(reward_dir / "pytest_score.json", "w"), indent=2)
-
-    # File 2: rubric_score.json (copy from best attempt)
-    best_attempt_num = best.get("attempt", 1)
-    best_rubric_path = reward_dir / f"attempt_{best_attempt_num}" / "rubric_score.json"
-    if best_rubric_path.exists():
-        shutil.copy(best_rubric_path, reward_dir / "rubric_score.json")
-    else:
-        json.dump({"rubric_score": round(final_rubric, 6)},
-                  open(reward_dir / "rubric_score.json", "w"), indent=2)
-
-    # File 3: avg_score.json
-    json.dump({
-        "avg_score": round(final_avg, 6),
-        "pytest_score": round(final_pytest, 6),
-        "rubric_score": round(final_rubric, 6),
-    }, open(reward_dir / "avg_score.json", "w"), indent=2)
-
-    # File 4: reward.json (Harbor standard + combined)
+    # reward.txt (Harbor standard)
     (reward_dir / "reward.txt").write_text(str(round(final_avg, 6)))
-    json.dump({
-        "reward": round(final_avg, 6),
-        "pytest_score": round(final_pytest, 6),
-        "rubric_score": round(final_rubric, 6),
-        "avg_score": round(final_avg, 6),
-        "stages": {k: best.get(k) for k in ["stage1", "stage2", "stage3", "stage4"]},
-        "stages_detail": stages_detail,
-        "found_ground_truth_bug": best.get("gt_success", False),
-        "test_results": best.get("test_results", {}),
-        "skip_reason": best.get("skip_reason"),
-    }, open(reward_dir / "reward.json", "w"), indent=2)
 
     # Load rubric criteria from best attempt if available
     best_rubric_detail = None
@@ -1034,6 +1186,28 @@ def main():
         "harbor_task": str(task_dir),
     }
     json.dump(summary, open(run_dir / "summary.json", "w"), indent=2)
+
+    # --- Finance API: post usage (opt-in, fully isolated) ---
+    if getattr(args, 'finance_api_url', None):
+        try:
+            scripts_dir_fin = Path(__file__).parent / "scripts"
+            sys.path.insert(0, str(scripts_dir_fin))
+            from finance_client import post_run_usage
+            post_run_usage(
+                finance_url=args.finance_api_url,
+                run_dir=run_dir,
+                task_name=task_name,
+                timestamp=timestamp,
+                model_name=llm_model,
+                project_id=getattr(args, 'finance_project_id', None) or task_name,
+                team_type=getattr(args, 'finance_team_type', "Projects"),
+                budget_type=getattr(args, 'finance_budget_type', "Production"),
+                rfp_sub_type=getattr(args, 'finance_rfp_sub_type', ""),
+                production_mode=getattr(args, 'finance_production_mode', "Singlephase"),
+                subscription_id=getattr(args, 'finance_subscription_id', ""),
+            )
+        except Exception as e:
+            print(f"  [finance] Warning: usage tracking failed: {e}")
 
     print(f"\n{'=' * 60}")
     print(f"Task: {task_name}")

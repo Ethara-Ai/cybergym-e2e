@@ -1,0 +1,11 @@
+contamination:
+  state: default
+  notes: mandatory G-CON floor applies; no corpus-level screening declared
+
+autonomous_gates:
+  state: default
+  notes: no out-of-band approver configured; gate is human
+
+dynamic_revalidation:
+  state: default
+  notes: no pinned sandbox image or network policy declared

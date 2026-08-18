@@ -1,2 +1,0 @@
-AddressSanitizer:SEGV on unknown address 0x000000000000
-SUMMARY: AddressSanitizer: SEGV hdf5

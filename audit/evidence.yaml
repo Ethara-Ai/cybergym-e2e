@@ -1,0 +1,154 @@
+scoped_at: "2026-08-18T16:00:00Z"
+git_sha: 1c388d465739ed3d5665bd8e3d0ef1f5f21acf6b
+dirty: true
+
+checks:
+  - id: CHK-001
+    name: docker_image_pinning
+    category: supply_chain
+    method: manual inspection of all 10 Dockerfiles
+    result: 8 of 10 images use mutable tags without sha256 digest
+    affected:
+      - espeak-ng__OSV-2023-984 (n132/arvo:62774-fix)
+      - exiv2__arvo_45993 (n132/arvo:45993-fix)
+      - ghostscript__arvo_44406 (n132/arvo:44406-fix)
+      - harfbuzz__arvo_62774 (n132/arvo:62774-fix)
+      - hdf5__arvo_58701 (n132/arvo:58701-fix)
+      - opensc__arvo_64898 (n132/arvo:64898-fix)
+      - pcapplusplus__arvo_43408 (n132/arvo:43408-fix)
+      - quickjs__oss-fuzz_416298149 (cybergym/e2e:quickjs)
+    pinned:
+      - curl__arvo_66012
+      - irssi__arvo_31491
+
+  - id: CHK-002
+    name: espeak_wrong_base_image
+    category: delivery_integrity
+    method: manual Dockerfile review
+    result: espeak-ng task uses harfbuzz base image tag n132/arvo:62774-fix
+    note: commented as intentional reuse but creates implicit dependency on harfbuzz image content
+
+  - id: CHK-003
+    name: credential_exposure
+    category: secret_exposure
+    method: manual review of .env file
+    result: AWS Bearer token for Bedrock found in .env
+    file: .env
+    gitignored: true
+    token_preview: "ABSKQmVkcm9ja0FQSUtleS1saDRiLWF0LTQy..."
+    note: not committed to git history, but present on disk
+
+  - id: CHK-004
+    name: container_runs_as_root
+    category: container_security
+    method: grep for USER directive in all Dockerfiles
+    result: no Dockerfile contains a USER directive; all containers run as root
+    affected: all 10 tasks
+
+  - id: CHK-005
+    name: irssi_internet_access
+    category: task_consistency
+    method: comparison of allow_internet across all task.toml files
+    result: irssi__arvo_31491 has allow_internet=true while all 9 others have false
+    note: internet access during vulnerability discovery could allow looking up known fixes
+
+  - id: CHK-006
+    name: irssi_name_prefix
+    category: delivery_conformance
+    method: comparison of task names across all task.toml files
+    result: irssi task name is "cybergym-e2e/irssi__arvo_31491" while all others lack the prefix
+    note: inconsistent naming may cause downstream tooling issues
+
+  - id: CHK-007
+    name: duplicate_poc_across_tasks
+    category: scoring_integrity
+    method: sha256 comparison of all solution/poc.bin files
+    result: pcapplusplus and hdf5 share identical PoC (20 null bytes)
+    hash: de47c9b27eb8d300dbb5f2c353e632c393262cf06340c4fa7f1b40c4cbd36f90
+    note: placeholder PoC (all zeros) suggests incomplete ground truth
+
+  - id: CHK-008
+    name: solution_poc_equals_test_poc
+    category: ground_truth_integrity
+    method: sha1 comparison of solution/poc.bin vs tests/data/poc.bin for all tasks
+    result: all 10 tasks have byte-identical files
+    note: expected behavior; tests/data/poc.bin is the GT PoC for stage 4 verification
+
+  - id: CHK-009
+    name: validate_py_duplication
+    category: delivery_conformance
+    method: sha1 comparison of environment/validate.py vs tests/validate.py
+    result: identical files in curl__arvo_66012 (0b04be297136e75e51f41608bddade487b00f793)
+    note: environment copy is for agent self-test; tests copy is for verifier grading
+
+  - id: CHK-010
+    name: rubric_judge_reliability
+    category: scoring_integrity
+    method: code review of evaluate_rubric() in run_harbor.py lines 663-776
+    result: single LLM judge call with no reliability discipline
+    issues:
+      - no position randomization
+      - no conformal prediction sets
+      - no perturbation suite
+      - no multi-trial aggregation
+      - temperature fixed at 0.0 (deterministic but single sample)
+      - no fallback on judge failure (returns None, score becomes 0)
+    note: rubric_score contributes 50% of final reward
+
+  - id: CHK-011
+    name: git_tree_dirty
+    category: provenance
+    method: git diff --stat
+    result: run_harbor.py has 228 insertions and 54 deletions uncommitted
+    note: live harness code differs from committed version
+
+  - id: CHK-012
+    name: no_provenance_files
+    category: provenance
+    method: inspection of all solution/ directories
+    result: no TRUTH.md, provenance.yaml, provenance.sig, or rubrics.json in any solution/
+    note: no machine-readable provenance or signed binding for ground truth
+
+  - id: CHK-013
+    name: tasks_gitignored
+    category: provenance
+    method: review of .gitignore
+    result: .gitignore contains "tasks/" entry
+    actual: tasks are still tracked (present in git ls-files)
+    note: gitignore does not retroactively untrack already-added files
+
+  - id: CHK-014
+    name: network_policy_not_enforced
+    category: container_security
+    method: code review of run_harbor.py start_container()
+    result: allow_internet from task.toml is never read or enforced by the runner
+    evidence: start_container() does not apply --network=none or any network restriction
+    note: even tasks with allow_internet=false have unrestricted network in practice
+
+  - id: CHK-015
+    name: negative_weight_network_detection_weak
+    category: scoring_integrity
+    method: code review of test_negative_weight_uses_network in test_output.py
+    result: detection relies on string matching in output files, not runtime monitoring
+    note: agent can use network without leaving textual evidence
+
+  - id: CHK-016
+    name: reward_contract_path
+    category: delivery_conformance
+    method: code review of test.sh verifier
+    result: verifier writes reward to /logs/verifier/reward.json and reward.txt
+    note: consistent with Harbor reward contract
+
+  - id: CHK-017
+    name: ground_truth_isolation
+    category: scoring_integrity
+    method: code review of run_verifier() in run_harbor.py
+    result: verifier runs in a fresh container separate from agent
+    note: agent container is destroyed before grading begins (line 1049-1051)
+
+  - id: CHK-018
+    name: patch_apply_fallback
+    category: verifier_robustness
+    method: code review of _apply_patch() in test_output.py
+    result: tries git apply (strip 0), then patch -p1 through -p3
+    note: multiple fallback paths could produce different outcomes
