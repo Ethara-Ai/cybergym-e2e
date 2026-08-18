@@ -1,5 +1,4 @@
 .env
-projects/
 agent_output/
 run_logs/
 tasks/
