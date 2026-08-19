@@ -1,13 +1,13 @@
 # ENGRAM FORGE-facing ledger projection. Phase 1 step 7.
 # The only ledger surface FORGE may read.
 # E16: the bridge is a function. This projection is a pure function of the canonical input closure.
-# No ledger exists and no Phase 1 has run, so this projection is empty.
+# Phase 0.5 gate approved 2026-08-19. Phase 1 not yet run. Projection still empty until Phase 1 builds the ledger.
 
 schema_version: "1.0.0"
 
 projection:
   status: unresolvable
-  reason: "Phase 0.5 gate not yet discharged. Phase 1 has not run. No ledger exists to project."
+  reason: "Phase 0.5 gate approved 2026-08-19. Phase 1 has not run. No ledger exists to project. requirements/benchmark.md and touchstones/README.md now exist."
   evaluated_at: "2026-08-19T00:00:00Z"
   projection_schema_version: "1.0.0"
   projector_digest: null

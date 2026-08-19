@@ -70,9 +70,9 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 python run_harbor.py tasks/harfbuzz__arvo_62774 \
     --agent openhands-sdk --model-provider anthropic
 
-# Multiple attempts with feedback loop
+# Single attempt, no feedback loop (default)
 python run_harbor.py tasks/harfbuzz__arvo_62774 \
-    --agent claude-code --max-attempts 3
+    --agent claude-code --max-attempts 1
 
 # Custom model and output directory
 python run_harbor.py tasks/curl__arvo_66012 \
@@ -106,7 +106,6 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 |------|---------|-------------|
 | `task_dir` | (required) | Path to Harbor task directory |
 | `--agent` | `claude-code` | Agent to use: `claude-code` or `openhands-sdk` |
-| `--max-attempts` | `1` | Number of retry attempts with feedback |
 | `--timeout` | `5400` | Agent timeout in seconds |
 | `--model-provider` | `anthropic` | LLM provider: `anthropic` or `bedrock` |
 | `--anthropic-model-id` | `claude-opus-4-8` | Anthropic model ID |

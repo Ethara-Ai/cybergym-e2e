@@ -1,453 +1,488 @@
 scan_date: '2026-08-19'
-post_fix: true
-fixes_applied:
-- espeak-ng validate.py added
-- POC_WARNING.md added to hdf5+pcapplusplus
-- pin_docker_images.sh created
-total_findings: 75
-by_severity:
-  HIGH: 10
-  MEDIUM: 64
-  LOW: 1
-findings:
-- source: docker
-  task: curl__arvo_66012
-  severity: MEDIUM
-  check: no_user_directive
-  detail: Dockerfile has no USER directive; container runs as root.
-- source: docker
-  task: espeak-ng__OSV-2023-984
-  severity: HIGH
-  check: image_pinning
-  detail: 'Image ''n132/arvo:62774-fix'' uses mutable tag ''62774-fix'' without @sha256:
-    digest pin.'
-- source: docker
-  task: espeak-ng__OSV-2023-984
-  severity: MEDIUM
-  check: third_party_namespace
-  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
-    be replaced without notice.
-- source: docker
-  task: espeak-ng__OSV-2023-984
-  severity: MEDIUM
-  check: no_user_directive
-  detail: Dockerfile has no USER directive; container runs as root.
-- source: docker
-  task: exiv2__arvo_45993
-  severity: HIGH
-  check: image_pinning
-  detail: 'Image ''n132/arvo:45993-fix'' uses mutable tag ''45993-fix'' without @sha256:
-    digest pin.'
-- source: docker
-  task: exiv2__arvo_45993
-  severity: MEDIUM
-  check: third_party_namespace
-  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
-    be replaced without notice.
-- source: docker
-  task: exiv2__arvo_45993
-  severity: MEDIUM
-  check: no_user_directive
-  detail: Dockerfile has no USER directive; container runs as root.
-- source: docker
-  task: ghostscript__arvo_44406
-  severity: HIGH
-  check: image_pinning
-  detail: 'Image ''n132/arvo:44406-fix'' uses mutable tag ''44406-fix'' without @sha256:
-    digest pin.'
-- source: docker
-  task: ghostscript__arvo_44406
-  severity: MEDIUM
-  check: third_party_namespace
-  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
-    be replaced without notice.
-- source: docker
-  task: ghostscript__arvo_44406
-  severity: MEDIUM
-  check: no_user_directive
-  detail: Dockerfile has no USER directive; container runs as root.
-- source: docker
-  task: harfbuzz__arvo_62774
-  severity: HIGH
-  check: image_pinning
-  detail: 'Image ''n132/arvo:62774-fix'' uses mutable tag ''62774-fix'' without @sha256:
-    digest pin.'
-- source: docker
-  task: harfbuzz__arvo_62774
-  severity: MEDIUM
-  check: third_party_namespace
-  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
-    be replaced without notice.
-- source: docker
-  task: harfbuzz__arvo_62774
-  severity: MEDIUM
-  check: no_user_directive
-  detail: Dockerfile has no USER directive; container runs as root.
-- source: docker
-  task: hdf5__arvo_58701
-  severity: HIGH
-  check: image_pinning
-  detail: 'Image ''n132/arvo:58701-fix'' uses mutable tag ''58701-fix'' without @sha256:
-    digest pin.'
-- source: docker
-  task: hdf5__arvo_58701
-  severity: MEDIUM
-  check: third_party_namespace
-  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
-    be replaced without notice.
-- source: docker
-  task: hdf5__arvo_58701
-  severity: MEDIUM
-  check: no_user_directive
-  detail: Dockerfile has no USER directive; container runs as root.
-- source: docker
-  task: irssi__arvo_31491
-  severity: MEDIUM
-  check: no_user_directive
-  detail: Dockerfile has no USER directive; container runs as root.
-- source: docker
-  task: opensc__arvo_64898
-  severity: HIGH
-  check: image_pinning
-  detail: 'Image ''n132/arvo:64898-fix'' uses mutable tag ''64898-fix'' without @sha256:
-    digest pin.'
-- source: docker
-  task: opensc__arvo_64898
-  severity: MEDIUM
-  check: third_party_namespace
-  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
-    be replaced without notice.
-- source: docker
-  task: opensc__arvo_64898
-  severity: MEDIUM
-  check: no_user_directive
-  detail: Dockerfile has no USER directive; container runs as root.
-- source: docker
-  task: pcapplusplus__arvo_43408
-  severity: HIGH
-  check: image_pinning
-  detail: 'Image ''n132/arvo:43408-fix'' uses mutable tag ''43408-fix'' without @sha256:
-    digest pin.'
-- source: docker
-  task: pcapplusplus__arvo_43408
-  severity: MEDIUM
-  check: third_party_namespace
-  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
-    be replaced without notice.
-- source: docker
-  task: pcapplusplus__arvo_43408
-  severity: MEDIUM
-  check: no_user_directive
-  detail: Dockerfile has no USER directive; container runs as root.
-- source: docker
-  task: quickjs__oss-fuzz_416298149
-  severity: HIGH
-  check: image_pinning
-  detail: 'Image ''cybergym/e2e:quickjs'' uses mutable tag ''quickjs'' without @sha256:
-    digest pin.'
-- source: docker
-  task: quickjs__oss-fuzz_416298149
-  severity: MEDIUM
-  check: third_party_namespace
-  detail: Image namespace 'cybergym' is not in the trusted set. Third-party images
-    can be replaced without notice.
-- source: docker
-  task: quickjs__oss-fuzz_416298149
-  severity: MEDIUM
-  check: no_user_directive
-  detail: Dockerfile has no USER directive; container runs as root.
-- source: task
-  task: hdf5__arvo_58701
-  severity: MEDIUM
-  check: null_poc
-  detail: "solution/poc.bin is 20 null bytes \u2014 likely a placeholder, not a genuine\
-    \ exploit input."
-- source: task
-  task: hdf5__arvo_58701
-  severity: MEDIUM
-  check: duplicate_poc
-  detail: 'solution/poc.bin is byte-identical across tasks: hdf5__arvo_58701, pcapplusplus__arvo_43408
-    (sha256: de47c9b27eb8d300...).'
-- source: task
-  task: irssi__arvo_31491
-  severity: LOW
-  check: task_name_prefix
-  detail: Declared name 'cybergym-e2e/irssi__arvo_31491' uses a prefix. Other tasks
-    use bare directory name.
-- source: task
-  task: irssi__arvo_31491
-  severity: MEDIUM
-  check: internet_allowed
-  detail: allow_internet=true. Agent may access the network during vulnerability discovery.
-- source: task
-  task: pcapplusplus__arvo_43408
-  severity: MEDIUM
-  check: null_poc
-  detail: "solution/poc.bin is 20 null bytes \u2014 likely a placeholder, not a genuine\
-    \ exploit input."
-- source: task
-  task: pcapplusplus__arvo_43408
-  severity: MEDIUM
-  check: duplicate_poc
-  detail: 'solution/poc.bin is byte-identical across tasks: hdf5__arvo_58701, pcapplusplus__arvo_43408
-    (sha256: de47c9b27eb8d300...).'
-- source: runner
-  task: ''
-  severity: HIGH
-  check: network_policy_unenforced
-  detail: start_container() never applies --network=none or any Docker network restriction.
-    allow_internet from task.toml is ignored. All containers have unrestricted network
-    access.
-- source: runner
-  task: ''
-  severity: HIGH
-  check: rubric_no_multi_trial
-  detail: evaluate_rubric() makes a single LLM judge call with no multi-trial aggregation,
-    no position randomization, and no perturbation suite. rubric_score contributes
-    50% of the final reward.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: credential_on_disk
-  detail: .env contains 'AWS_BEARER_TOKEN'. While gitignored, the credential is exposed
-    if the project directory is shared, backed up, or accessed by other tools.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
-- source: runner
-  task: ''
-  severity: MEDIUM
-  check: shell_injection
-  detail: subprocess call with shell=True and f-string interpolation. Crafted file
-    paths could inject shell commands.
+run_kind: POST-GATE-APPROVAL
+notes: Post Phase 0.5 gate approval scan. requirements/ and touchstones/ now exist.
+scanners:
+  docker:
+    summary:
+      tasks_scanned: 10
+      total_findings: 26
+      by_check:
+        no_user_directive: 10
+        image_pinning: 8
+        third_party_namespace: 8
+    findings:
+    - check: no_user_directive
+      severity: MEDIUM
+      detail: Dockerfile has no USER directive; container runs as root.
+      task: curl__arvo_66012
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/curl__arvo_66012/environment/Dockerfile
+    - check: image_pinning
+      severity: HIGH
+      detail: 'Image ''n132/arvo:62774-fix'' uses mutable tag ''62774-fix'' without
+        @sha256: digest pin.'
+      task: espeak-ng__OSV-2023-984
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/espeak-ng__OSV-2023-984/environment/Dockerfile:5
+    - check: third_party_namespace
+      severity: MEDIUM
+      detail: Image namespace 'n132' is not in the trusted set. Third-party images
+        can be replaced without notice.
+      task: espeak-ng__OSV-2023-984
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/espeak-ng__OSV-2023-984/environment/Dockerfile:5
+    - check: no_user_directive
+      severity: MEDIUM
+      detail: Dockerfile has no USER directive; container runs as root.
+      task: espeak-ng__OSV-2023-984
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/espeak-ng__OSV-2023-984/environment/Dockerfile
+    - check: image_pinning
+      severity: HIGH
+      detail: 'Image ''n132/arvo:45993-fix'' uses mutable tag ''45993-fix'' without
+        @sha256: digest pin.'
+      task: exiv2__arvo_45993
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/exiv2__arvo_45993/environment/Dockerfile:6
+    - check: third_party_namespace
+      severity: MEDIUM
+      detail: Image namespace 'n132' is not in the trusted set. Third-party images
+        can be replaced without notice.
+      task: exiv2__arvo_45993
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/exiv2__arvo_45993/environment/Dockerfile:6
+    - check: no_user_directive
+      severity: MEDIUM
+      detail: Dockerfile has no USER directive; container runs as root.
+      task: exiv2__arvo_45993
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/exiv2__arvo_45993/environment/Dockerfile
+    - check: image_pinning
+      severity: HIGH
+      detail: 'Image ''n132/arvo:44406-fix'' uses mutable tag ''44406-fix'' without
+        @sha256: digest pin.'
+      task: ghostscript__arvo_44406
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/ghostscript__arvo_44406/environment/Dockerfile:6
+    - check: third_party_namespace
+      severity: MEDIUM
+      detail: Image namespace 'n132' is not in the trusted set. Third-party images
+        can be replaced without notice.
+      task: ghostscript__arvo_44406
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/ghostscript__arvo_44406/environment/Dockerfile:6
+    - check: no_user_directive
+      severity: MEDIUM
+      detail: Dockerfile has no USER directive; container runs as root.
+      task: ghostscript__arvo_44406
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/ghostscript__arvo_44406/environment/Dockerfile
+    - check: image_pinning
+      severity: HIGH
+      detail: 'Image ''n132/arvo:62774-fix'' uses mutable tag ''62774-fix'' without
+        @sha256: digest pin.'
+      task: harfbuzz__arvo_62774
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/harfbuzz__arvo_62774/environment/Dockerfile:6
+    - check: third_party_namespace
+      severity: MEDIUM
+      detail: Image namespace 'n132' is not in the trusted set. Third-party images
+        can be replaced without notice.
+      task: harfbuzz__arvo_62774
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/harfbuzz__arvo_62774/environment/Dockerfile:6
+    - check: no_user_directive
+      severity: MEDIUM
+      detail: Dockerfile has no USER directive; container runs as root.
+      task: harfbuzz__arvo_62774
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/harfbuzz__arvo_62774/environment/Dockerfile
+    - check: image_pinning
+      severity: HIGH
+      detail: 'Image ''n132/arvo:58701-fix'' uses mutable tag ''58701-fix'' without
+        @sha256: digest pin.'
+      task: hdf5__arvo_58701
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/hdf5__arvo_58701/environment/Dockerfile:6
+    - check: third_party_namespace
+      severity: MEDIUM
+      detail: Image namespace 'n132' is not in the trusted set. Third-party images
+        can be replaced without notice.
+      task: hdf5__arvo_58701
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/hdf5__arvo_58701/environment/Dockerfile:6
+    - check: no_user_directive
+      severity: MEDIUM
+      detail: Dockerfile has no USER directive; container runs as root.
+      task: hdf5__arvo_58701
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/hdf5__arvo_58701/environment/Dockerfile
+    - check: no_user_directive
+      severity: MEDIUM
+      detail: Dockerfile has no USER directive; container runs as root.
+      task: irssi__arvo_31491
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/irssi__arvo_31491/environment/Dockerfile
+    - check: image_pinning
+      severity: HIGH
+      detail: 'Image ''n132/arvo:64898-fix'' uses mutable tag ''64898-fix'' without
+        @sha256: digest pin.'
+      task: opensc__arvo_64898
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/opensc__arvo_64898/environment/Dockerfile:6
+    - check: third_party_namespace
+      severity: MEDIUM
+      detail: Image namespace 'n132' is not in the trusted set. Third-party images
+        can be replaced without notice.
+      task: opensc__arvo_64898
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/opensc__arvo_64898/environment/Dockerfile:6
+    - check: no_user_directive
+      severity: MEDIUM
+      detail: Dockerfile has no USER directive; container runs as root.
+      task: opensc__arvo_64898
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/opensc__arvo_64898/environment/Dockerfile
+    - check: image_pinning
+      severity: HIGH
+      detail: 'Image ''n132/arvo:43408-fix'' uses mutable tag ''43408-fix'' without
+        @sha256: digest pin.'
+      task: pcapplusplus__arvo_43408
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/pcapplusplus__arvo_43408/environment/Dockerfile:6
+    - check: third_party_namespace
+      severity: MEDIUM
+      detail: Image namespace 'n132' is not in the trusted set. Third-party images
+        can be replaced without notice.
+      task: pcapplusplus__arvo_43408
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/pcapplusplus__arvo_43408/environment/Dockerfile:6
+    - check: no_user_directive
+      severity: MEDIUM
+      detail: Dockerfile has no USER directive; container runs as root.
+      task: pcapplusplus__arvo_43408
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/pcapplusplus__arvo_43408/environment/Dockerfile
+    - check: image_pinning
+      severity: HIGH
+      detail: 'Image ''cybergym/e2e:quickjs'' uses mutable tag ''quickjs'' without
+        @sha256: digest pin.'
+      task: quickjs__oss-fuzz_416298149
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/quickjs__oss-fuzz_416298149/environment/Dockerfile:6
+    - check: third_party_namespace
+      severity: MEDIUM
+      detail: Image namespace 'cybergym' is not in the trusted set. Third-party images
+        can be replaced without notice.
+      task: quickjs__oss-fuzz_416298149
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/quickjs__oss-fuzz_416298149/environment/Dockerfile:6
+    - check: no_user_directive
+      severity: MEDIUM
+      detail: Dockerfile has no USER directive; container runs as root.
+      task: quickjs__oss-fuzz_416298149
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/quickjs__oss-fuzz_416298149/environment/Dockerfile
+  task:
+    summary:
+      tasks_scanned: 10
+      total_findings: 6
+      by_check:
+        null_poc: 2
+        duplicate_poc: 2
+        task_name_prefix: 1
+        internet_allowed: 1
+    findings:
+    - check: null_poc
+      severity: MEDIUM
+      detail: solution/poc.bin is 20 null bytes — likely a placeholder, not a genuine
+        exploit input.
+      task: hdf5__arvo_58701
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/hdf5__arvo_58701/solution/poc.bin
+    - check: duplicate_poc
+      severity: MEDIUM
+      detail: 'solution/poc.bin is byte-identical across tasks: hdf5__arvo_58701,
+        pcapplusplus__arvo_43408 (sha256: de47c9b27eb8d300...).'
+      task: hdf5__arvo_58701
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/hdf5__arvo_58701/solution/poc.bin
+    - check: task_name_prefix
+      severity: LOW
+      detail: Declared name 'cybergym-e2e/irssi__arvo_31491' uses a prefix. Other
+        tasks use bare directory name.
+      task: irssi__arvo_31491
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/irssi__arvo_31491/task.toml
+    - check: internet_allowed
+      severity: MEDIUM
+      detail: allow_internet=true. Agent may access the network during vulnerability
+        discovery.
+      task: irssi__arvo_31491
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/irssi__arvo_31491/task.toml
+    - check: null_poc
+      severity: MEDIUM
+      detail: solution/poc.bin is 20 null bytes — likely a placeholder, not a genuine
+        exploit input.
+      task: pcapplusplus__arvo_43408
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/pcapplusplus__arvo_43408/solution/poc.bin
+    - check: duplicate_poc
+      severity: MEDIUM
+      detail: 'solution/poc.bin is byte-identical across tasks: hdf5__arvo_58701,
+        pcapplusplus__arvo_43408 (sha256: de47c9b27eb8d300...).'
+      task: pcapplusplus__arvo_43408
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/pcapplusplus__arvo_43408/solution/poc.bin
+  runner:
+    summary:
+      total_findings: 43
+      by_check:
+        network_policy_unenforced: 1
+        rubric_no_multi_trial: 1
+        credential_on_disk: 1
+        shell_injection: 40
+    findings:
+    - check: network_policy_unenforced
+      severity: HIGH
+      detail: start_container() never applies --network=none or any Docker network
+        restriction. allow_internet from task.toml is ignored. All containers have
+        unrestricted network access.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/run_harbor.py
+    - check: rubric_no_multi_trial
+      severity: HIGH
+      detail: evaluate_rubric() makes a single LLM judge call with no multi-trial
+        aggregation, no position randomization, and no perturbation suite. rubric_score
+        contributes 50% of the final reward.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/run_harbor.py:668
+      line: 668
+    - check: credential_on_disk
+      severity: MEDIUM
+      detail: .env contains 'AWS_BEARER_TOKEN'. While gitignored, the credential is
+        exposed if the project directory is shared, backed up, or accessed by other
+        tools.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/.env
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/curl__arvo_66012/tests/test_output.py:77
+      line: 77
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/curl__arvo_66012/tests/test_output.py:93
+      line: 93
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/curl__arvo_66012/tests/test_output.py:99
+      line: 99
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/curl__arvo_66012/tests/test_output.py:123
+      line: 123
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/espeak-ng__OSV-2023-984/tests/test_output.py:77
+      line: 77
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/espeak-ng__OSV-2023-984/tests/test_output.py:93
+      line: 93
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/espeak-ng__OSV-2023-984/tests/test_output.py:99
+      line: 99
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/espeak-ng__OSV-2023-984/tests/test_output.py:123
+      line: 123
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/exiv2__arvo_45993/tests/test_output.py:77
+      line: 77
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/exiv2__arvo_45993/tests/test_output.py:93
+      line: 93
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/exiv2__arvo_45993/tests/test_output.py:99
+      line: 99
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/exiv2__arvo_45993/tests/test_output.py:123
+      line: 123
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/ghostscript__arvo_44406/tests/test_output.py:77
+      line: 77
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/ghostscript__arvo_44406/tests/test_output.py:93
+      line: 93
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/ghostscript__arvo_44406/tests/test_output.py:99
+      line: 99
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/ghostscript__arvo_44406/tests/test_output.py:123
+      line: 123
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/harfbuzz__arvo_62774/tests/test_output.py:77
+      line: 77
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/harfbuzz__arvo_62774/tests/test_output.py:93
+      line: 93
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/harfbuzz__arvo_62774/tests/test_output.py:99
+      line: 99
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/harfbuzz__arvo_62774/tests/test_output.py:123
+      line: 123
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/hdf5__arvo_58701/tests/test_output.py:77
+      line: 77
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/hdf5__arvo_58701/tests/test_output.py:93
+      line: 93
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/hdf5__arvo_58701/tests/test_output.py:99
+      line: 99
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/hdf5__arvo_58701/tests/test_output.py:123
+      line: 123
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/irssi__arvo_31491/tests/test_output.py:77
+      line: 77
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/irssi__arvo_31491/tests/test_output.py:93
+      line: 93
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/irssi__arvo_31491/tests/test_output.py:99
+      line: 99
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/irssi__arvo_31491/tests/test_output.py:123
+      line: 123
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/opensc__arvo_64898/tests/test_output.py:77
+      line: 77
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/opensc__arvo_64898/tests/test_output.py:93
+      line: 93
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/opensc__arvo_64898/tests/test_output.py:99
+      line: 99
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/opensc__arvo_64898/tests/test_output.py:123
+      line: 123
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/pcapplusplus__arvo_43408/tests/test_output.py:77
+      line: 77
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/pcapplusplus__arvo_43408/tests/test_output.py:93
+      line: 93
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/pcapplusplus__arvo_43408/tests/test_output.py:99
+      line: 99
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/pcapplusplus__arvo_43408/tests/test_output.py:123
+      line: 123
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/quickjs__oss-fuzz_416298149/tests/test_output.py:77
+      line: 77
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/quickjs__oss-fuzz_416298149/tests/test_output.py:93
+      line: 93
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/quickjs__oss-fuzz_416298149/tests/test_output.py:99
+      line: 99
+    - check: shell_injection
+      severity: MEDIUM
+      detail: subprocess call with shell=True and f-string interpolation. Crafted
+        file paths could inject shell commands.
+      location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/quickjs__oss-fuzz_416298149/tests/test_output.py:123
+      line: 123
+totals:
+  raw_findings: 75
+  unique_patterns: 11
+  unique_checks:
+  - credential_on_disk
+  - duplicate_poc
+  - image_pinning
+  - internet_allowed
+  - network_policy_unenforced
+  - no_user_directive
+  - null_poc
+  - rubric_no_multi_trial
+  - shell_injection
+  - task_name_prefix
+  - third_party_namespace

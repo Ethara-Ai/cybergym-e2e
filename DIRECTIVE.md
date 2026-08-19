@@ -1,10 +1,12 @@
 # DIRECTIVE: ENGRAM
 
-**Ledger state: STALE** 🟡 pending the Phase 0.5 scope gate.
+**Ledger state: STALE** 🟡 Phase 0.5 gate approved; Phase 1 not yet run.
 
-**Project**: CyberGym-E2E. **Date**: 2026-08-19. **Run kind**: POST-FIX UPDATE.
+**Project**: CyberGym-E2E. **Date**: 2026-08-19. **Run kind**: POST-GATE-APPROVAL.
 
 **CRUCIBLE disposition**: HOLD (updated 2026-08-19 after fixes applied).
+
+**Gate status**: Phase 0.5 scope gate **approved** 2026-08-19. `requirements/benchmark.md` drafted from paper (arXiv:2606.04460v2). `touchstones/README.md` scaffolded with published baselines. Phase 1 unblocked but not yet run. GAP-E-001 and GAP-E-002 partially resolved (directories exist, content needs human review).
 
 **Bound artifacts**: `memory/scope.yaml` at `57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd`, `memory/hardness.yaml` at `858228976a625ac4a73c3d5e4a3cf64d214d1aff228e185fb50101bb4a6ad16c`.
 
