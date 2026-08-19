@@ -1,0 +1,58 @@
+# Derived progress cache. E28: derived, never authoritative. Harness-private:
+# never enters FORGE_VIEW or CRUCIBLE_VIEW. Reconstructable from authoritative
+# artifacts if deleted.
+
+run:
+  instrument: ENGRAM
+  kind: INIT
+  invoked_at: "2026-08-18T00:00:00Z"
+
+phases:
+  - id: R
+    status: complete
+    notes: "Research reviewed from trinity/research/ (21 paired pdf+md papers). Parent research/ is absent and is recorded as GAP-E-004. ENGRAM defines no Phase R section of its own; its research lane lives in Phase H."
+    artifacts: []
+
+  - id: "0"
+    status: complete
+    artifacts:
+      - memory/scope.yaml
+      - memory/capabilities.yaml
+      - memory/hardness.yaml
+      - HARDNESS.md
+      - DIRECTIVE.md
+    scope_sha256: 57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd
+    capabilities_sha256: 408c2b38d635d434455b20e57bb88d6a8752b24aa4cd5530bb5423ba18eb0bf9
+    coverage_gaps: 12
+    ambiguities: 2
+    ambiguities_resolved: 1
+
+  - id: "0.5"
+    status: pending_approval
+    notes: "Scope sign-off gate. Producer is this ENGRAM run; approver must be human. No gate_approver role exists in this project, so no out-of-band approval path is available (memory/capabilities.yaml autonomous_gates state default)."
+    instruction: >
+      echo '57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd' > memory/approval
+
+  - id: "1"
+    status: blocked
+    blocked_by: "0.5"
+    notes: "Phase 1 scaffolder must recompute the scope digest first and exit on absence or mismatch. Not started."
+
+  - id: "2"
+    status: not_started
+  - id: H
+    status: complete_day_one
+    notes: "Day-one hardness catalog built before any task exists, as genesis intends. 341 levers, 45 categories, 3 axes, 47 archetypes, generated from trinity/research/HARDNESS.md. All rows CANDIDATE, all lever states EXPIRED, zero ACTIVE: correct closed state under E1 and E2 with no CFER and no pinned cohort. Reconciliation against measured evidence remains pending the gate."
+    artifacts:
+      - memory/hardness.yaml
+      - HARDNESS.md
+  - id: S
+    status: not_started
+  - id: G
+    status: not_started
+    notes: "Genesis is a separate human-approved branch. AMB-E-002 must be resolved before Phase G is invoked."
+
+waiting_on:
+  gate: "0.5"
+  artifact: memory/scope.yaml
+  digest: 57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd

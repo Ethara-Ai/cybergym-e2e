@@ -4,107 +4,62 @@
 
 **Project**: CyberGym-E2E, a benchmark harness for evaluating AI agents on real-world vulnerability discovery and patching.
 
-**Scope**: 10 Harbor-format task bundles, 1 standalone runner (run_harbor.py), verifier test suites, LLM rubric judge, Docker environments, ground-truth solutions, agent trajectories.
+**Git SHA**: `c743ff475c3cbdca04caf6c45ee3a1e5a618056c` (dirty: `trinity`). **Trinity SHA**: `6757043b74cb7f76148983e979e491e7d943b555`. **Date**: 2026-08-18. **Run kind**: UPDATE.
 
-**Git SHA**: `1c388d465739ed3d5665bd8e3d0ef1f5f21acf6b` (dirty: run_harbor.py has uncommitted changes)
+**Scope digest**: `7bca974b4481ed7aef734870afdc9384be1c0bccb47242f8552b345973c6c776`. **Supersedes**: `audit/lineage/VERDICT.1c388d4.md` at `49163fd1576fa63032973d45f6210288214199cbecd1d9a6ac22a978f657049e`.
 
-**Trinity SHA**: `6757043b74cb7f76148983e979e491e7d943b555`
+## Executive summary
 
-**Date**: 2026-08-18
+This is a re-audit, and its central conclusion is about the previous one. The prior audit was emitted against a project that has since moved, under a sign-off gate that was never discharged, and against a task tree that is no longer materialized. Its ten findings are retained verbatim and carried as suspended claims. They are not withdrawn, and nothing in this report contradicts their substance; they simply no longer rest on bytes that exist, so they cannot be re-asserted as evidence until they are re-derived under an approved scope against a rebuilt tree.
 
-## Executive Summary
+The project itself is not in a refusal state. Every open item is a wait condition: a gate to discharge, a build to run, a projection to receive, or a trust root to pin. That is why the disposition is HOLD rather than BLOCK.
 
-CyberGym-E2E is a well-structured vulnerability discovery benchmark with sound task design and a correct verifier isolation model (agent container destroyed before grading). However, several critical-capable gaps prevent a SHIP disposition. The most significant is that network isolation is declared but never enforced, meaning agents can look up known fixes online. Additionally, 80% of Docker images use unpinned third-party tags, the rubric judge has no reliability discipline despite contributing 50% of the final score, and ground truth lacks any provenance or signature binding.
+## Why the prior audit is suspended
 
-## Critical Findings
+Three independent reasons, any one of which would be sufficient.
 
-### F-001: Network policy not enforced ⛔
+**The gate was never discharged.** `audit/progress.yaml` recorded Phase 0.5 as `pending_approval` while Phases 1 and 2 were recorded complete and `VERDICT.md` was emitted. No `audit/scope.approved` file existed anywhere in the tree. CRUCIBLE Phase 0.5 item 2 requires the Phase 1 scaffolder to recompute the scope digest first and to raise and exit before writing any harness file. Recorded as D-COVERAGE-GAP-005.
 
-The runner never reads `allow_internet` from task.toml and never applies `--network=none`. All 10 task containers have unrestricted network access. For a benchmark measuring vulnerability discovery capability, this means an agent could trivially look up the answer for any of these known OSS-Fuzz/arvo vulnerabilities. This is the most significant scoring integrity issue.
+**The project moved.** The prior scope was derived at root `/Users/apple/Desktop/Harness/project/cybergym-e2e` against `1c388d4`. HEAD is now `c743ff4`, two commits ahead: 193 files changed, 1374 insertions and 34156 deletions. `run_harbor.py` alone moved by 228 added and 54 removed lines, and it was recorded dirty and ungraded at the time of the prior audit. Every prior finding touching that file was derived against bytes that are no longer on disk.
 
-**Evidence**: run_harbor.py `start_container()` (lines 148-159) does not reference allow_internet or apply any network restriction. Confirmed by grep returning zero matches for "allow_internet", "network.*none", or "--net" in run_harbor.py.
+**The graded artifact is not materialized.** The prior scope recorded 10 Harbor bundles at schema version 1.1. Zero `task.toml` files exist in the tree today.
 
-### F-002: 8 of 10 Docker images use unpinned mutable tags ⚠️
+## The dataset question, settled
 
-Only curl and irssi use `@sha256:` pinned images. The remaining 8 tasks use `n132/arvo:*-fix` or `cybergym/e2e:quickjs` tags from Docker Hub, which can be mutated at any time. The `n132/` namespace is an unverified third-party account.
+`dataset` was a symlink, not a directory. `dataset.zip` preserves the entry with file mode 120755 pointing at `tasks`, and `.gitignore` ignores `tasks/`, `data/`, `dataset/`, `jobs/` and `run_logs/`. The bundles were a build output of `convert_to_harbor.py`, whose `--out` default is `ROOT/tasks`.
 
-### F-005: Rubric judge lacks reliability discipline ⚠️
+This matters for the disposition. The graded surface is recoverable, not lost, so D-COVERAGE-GAP-004 was downgraded from BLOCK to HOLD and the correct remedy is to rebuild and re-audit rather than to retract. Rebuilding needs the `data/projects` payloads, which were removed at `c743ff4` and are available from HuggingFace `sunblaze-ucb/cybergym-e2e` at revision `a65d1d273eb7ee5db7525418120fc2434b887203`, recorded in the tree at the prior SHA. The 139 upstream project definitions under `projects/`, 5659 files at tree digest `9e2a325b752793d3aea6d8023897d17b23645f37c33f4fe8e432e5fc5a32a65f`, are present and intact.
 
-`evaluate_rubric()` makes a single LLM judge call (Claude Sonnet 4) with no position randomization, no perturbation suite, no conformal prediction sets, and no multi-trial aggregation. `rubric_score` contributes 50% of the final reward. On judge failure, rubric_score silently defaults to 0.0.
+## Coverage gaps
 
-### F-012: No provenance or signatures for ground truth ⚠️
+| Gap | Subject | Caps at |
+|---|---|---|
+| D-COVERAGE-GAP-001 | no exclusion-list root, none of the five mandated named rows carried | HOLD |
+| D-COVERAGE-GAP-002 | no manifest or lockfile tracked, dependency surface unenumerable | HOLD |
+| D-COVERAGE-GAP-003 | `memory/crucible_view.yaml` absent, no standing direction | HOLD |
+| D-COVERAGE-GAP-004 | graded artifact not materialized, regenerable | HOLD |
+| D-COVERAGE-GAP-005 | prior run advanced past an undischarged gate, remediated by suspension | HOLD |
 
-No solution/ directory contains TRUTH.md, provenance.yaml, provenance.sig, or any binding record. The ground-truth PoC and patch files have no signed chain linking them to the source vulnerability.
+The dependency gap is worth stating plainly: no `requirements.txt`, `pyproject.toml`, `setup.py`, `package.json` or lockfile of any kind is tracked. A Python and Docker harness that declares no dependencies cannot have its dependency surface audited from declared bytes, which also means the prior finding about unpinned container images has no manifest to be checked against.
 
-## Additional Findings
+## Surface change since the prior audit
 
-| ID | Title | Severity | Class |
-|---|---|---|---|
-| F-003 | espeak-ng uses harfbuzz base image | MEDIUM | Delivery integrity |
-| F-004 | All containers run as root | MEDIUM | Container security |
-| F-006 | irssi allows internet (inconsistency) | MEDIUM | Task consistency |
-| F-007 | pcapplusplus and hdf5 share identical null-byte PoC | MEDIUM | Ground truth |
-| F-008 | irssi task name has cybergym-e2e/ prefix | LOW | Delivery conformance |
-| F-009 | Negative-weight network check is string-only | MEDIUM | Scoring integrity |
-| F-010 | Shell injection via subprocess with shell=True | MEDIUM | Code injection |
-| F-011 | Git tree dirty with uncommitted changes | LOW | Provenance |
-| F-013 | AWS Bearer Token on disk in .env | MEDIUM | Secret exposure |
-| F-014 | validate.py reveals grading logic to agent | LOW | Information disclosure |
-| F-015 | irssi tests/ has different structure than others | LOW | Delivery conformance |
+**Newly present.** `scripts/finance_client.py`, 178 lines, POSTs aggregated token-usage metrics to an external Finance API over httpx or urllib. It is opt-in, gated on `--finance-api-url` which defaults to `None`, runs on the host after scoring from already-written output files, and cannot alter the harness exit code or any score. It is nonetheless a new outbound network path introduced after an audit whose leading finding was that network isolation is declared but never enforced, and it should be in scope when that finding is re-derived. Its module docstring documents a call signature that does not match the function it describes.
 
-## Coverage Gaps (12 total, each caps at HOLD)
+**Removed.** `data/` (17 files, including the HuggingFace cache reference and the `hdf5/arvo_58701` payload), `jobs/`, `run_logs/` (6 logs). Deleted blobs remain reachable in git history, so full-history secret scanning must target history and not only the working tree.
 
-GAP-001 through GAP-012 are detailed in `audit/findings.yaml`. Key gaps include: absent crucible_view.yaml, absent requirements, absent touchstones, absent provenance, dirty git tree, unpinned images, absent execution attestation, absent scanner databases, unsigned scope, absent contamination screening roots, and absent rubric judge reliability.
+**Unchanged.** `projects/`, `templates/`, `lib/validate.py`, `convert_to_harbor.py`.
 
-## What Works Well
+## Suspended claims carried forward
 
-- ✅ Verifier runs in a fresh container separate from the agent (run_harbor.py line 1049-1051)
-- ✅ Agent container is destroyed before grading begins
-- ✅ Solution files (fix.patch, poc.bin) are not copied into agent environment
-- ✅ Negative-weight tests penalize cheating behaviors (network use, empty patches, GT copying)
-- ✅ 4-stage validation covers PoC crash, patch fix, test suite, and GT PoC confirmation
-- ✅ Weighted scoring provides nuanced rewards beyond binary pass/fail
-- ✅ Instruction.md files do not leak solution paths or ground truth locations
-- ✅ disallowedTools setting in Claude Code blocks WebFetch, WebSearch during agent runs
-- ✅ Two tasks (curl, irssi) use properly pinned Docker images
+Retained verbatim in `audit/findings.yaml` at `72519a313f09c20c9fe3878dcf6c80c86618d7ffc861a2148b9d553e46efbf08` and tracked as watch items: F-001 network isolation declared but never enforced, F-002 unpinned container image tags, F-005 rubric judge carrying half the final score with no reliability discipline, F-012 ground truth without provenance or signature binding, and gaps GAP-004, GAP-007 and GAP-012. Each must be re-derived, not re-copied, once the tree is rebuilt.
 
-## Disposition Rationale
+## Path out of HOLD
 
-HOLD is driven by:
-1. Network isolation gap (F-001) - agents may have access to answers
-2. Unpinned images (F-002, GAP-007) - builds are not reproducible
-3. Rubric judge unreliability (F-005, GAP-012) - 50% of score is from a single unvalidated judge call
-4. Absent provenance (F-012, GAP-004) - ground truth has no signed binding
-5. 12 named coverage gaps, each independently capping at HOLD
-
-## Path to SHIP
-
-1. Enforce network policy: read `allow_internet` from task.toml and apply `--network=none` to Docker containers when false
-2. Pin all Docker images with `@sha256:` digests
-3. Apply rubric judge reliability discipline (multi-trial, randomization, perturbation)
-4. Add provenance.yaml with signed bindings to all solution/ directories
-5. Commit all harness changes and clean the git tree
-6. Populate requirements/ and touchstones/ for the audit framework
-7. Create crucible_view.yaml for projected values
-8. Replace null-byte placeholder PoCs with genuine exploit inputs
-9. Add USER directives to Dockerfiles for least-privilege agent execution
-10. Replace shell=True subprocess calls with argument lists
-
-## Approval Gate
-
-Scope approval is pending. To approve:
+Discharge the scope gate, rebuild the task tree from the pinned upstream revision, and let ENGRAM reach Phase 1 so a `CRUCIBLE_VIEW` exists to scope against. Then Phases 1 and 2 can run for real and the suspended findings can be re-derived against bytes that exist.
 
 ```bash
-shasum -a 256 audit/scope.yaml
-# Expected: 8fe3aad51feba33a607430efc6b0bec78735b66f0d906e15e4fbf9e56e146529
-echo '8fe3aad51feba33a607430efc6b0bec78735b66f0d906e15e4fbf9e56e146529' > audit/scope.approved
+echo '7bca974b4481ed7aef734870afdc9384be1c0bccb47242f8552b345973c6c776' > audit/scope.approved
 ```
 
-## Artifacts
-
-- `audit/scope.yaml` - project scope and surfaces
-- `audit/capabilities.yaml` - capability opt-in block
-- `audit/evidence.yaml` - grounded evidence from checks
-- `audit/findings.yaml` - structured findings and coverage gaps
-- `audit/review.md` - Phase 2 model prompt
-- `audit/TODO.md` - generated augmentation backlog
+*Instrument: CRUCIBLE | Harness: `audit/` | Contract: `trinity/CRUCIBLE.md`*

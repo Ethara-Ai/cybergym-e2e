@@ -44,7 +44,7 @@ Usage:
 
     # Custom model and output directory
     python run_harbor.py tasks/curl__arvo_66012 \\
-        --agent claude-code --anthropic-model-id claude-sonnet-4-20250514 \\
+        --agent claude-code --anthropic-model-id claude-opus-4-8 \\
         --output-dir agent_output/curl_test
 
     # With timeout override
@@ -395,6 +395,7 @@ def convert_jsonl_to_trajectory(log_path, output_path):
         total_prompt = 0
         total_completion = 0
         total_cached = 0
+        total_cache_creation = 0
         pending_observations = []
 
         for ev in events:
@@ -468,9 +469,11 @@ def convert_jsonl_to_trajectory(log_path, output_path):
                 prompt_tokens = usage.get("input_tokens", 0) or 0
                 completion_tokens = usage.get("output_tokens", 0) or 0
                 cached_tokens = usage.get("cache_read_input_tokens", 0) or 0
+                cache_creation_tokens = usage.get("cache_creation_input_tokens", 0) or 0
                 total_prompt += prompt_tokens
                 total_completion += completion_tokens
                 total_cached += cached_tokens
+                total_cache_creation += cache_creation_tokens
 
                 step_id += 1
                 step = {
@@ -491,6 +494,7 @@ def convert_jsonl_to_trajectory(log_path, output_path):
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
                     "cached_tokens": cached_tokens,
+                    "cache_creation_tokens": cache_creation_tokens,
                 }
                 steps.append(step)
 
@@ -510,6 +514,7 @@ def convert_jsonl_to_trajectory(log_path, output_path):
                 "total_prompt_tokens": total_prompt,
                 "total_completion_tokens": total_completion,
                 "total_cached_tokens": total_cached,
+                "total_cache_creation_tokens": total_cache_creation,
                 "total_cost_usd": 0.0,
                 "total_steps": len(steps),
             },
@@ -697,7 +702,15 @@ Respond ONLY with the JSON array, no other text."""
     base_url = llm_env.get("LLM_BASE_URL") or llm_env.get("ANTHROPIC_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
     auth_token = llm_env.get("ANTHROPIC_AUTH_TOKEN") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
 
-    judge_model = "claude-sonnet-4-20250514"
+    # The rubric judge runs on the HOST, but ANTHROPIC_BASE_URL may hold the
+    # container-facing alias set by the OAuth bridge.  host.docker.internal does
+    # not resolve on the host (macOS/Linux alike), so rewrite it to loopback --
+    # the bridge binds there too.  Without this the judge dies on DNS and every
+    # run silently scores on pytest alone with no judge tokens.
+    if "host.docker.internal" in base_url:
+        base_url = base_url.replace("host.docker.internal", "127.0.0.1")
+
+    judge_model = "claude-sonnet-4-6"
 
     headers = {
         "content-type": "application/json",
@@ -832,6 +845,34 @@ def save_attempt_scores(run_dir, attempt, pytest_data, rubric_data):
     return avg_score
 
 
+def record_judge_usage(run_dir, attempt, task_dir, log_file, llm_env, llm_model):
+    """Run the rubric judge on the trajectory even when the attempt produced no
+    poc/patch, purely so the judge's token usage is captured for finance
+    reporting. The rubric judge only needs the trajectory text (it does not need
+    a PoC), so it can always run. Writes rubric_score.json (with judge_usage) so
+    finance_client._read_judge_usage() can pick it up. Does NOT alter the
+    attempt's reported pass/fail score — a no-poc/no-patch attempt stays a
+    failure; only the judge-token columns get populated."""
+    attempt_dir = run_dir / "verifier" / f"attempt_{attempt}"
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        traj_text = log_file.read_text(errors="replace") if log_file.exists() else ""
+        rubric_data = evaluate_rubric(task_dir, traj_text, llm_env, llm_model)
+    except Exception as e:
+        print(f"  Judge usage capture failed: {e}")
+        rubric_data = None
+    if rubric_data:
+        json.dump(rubric_data, open(attempt_dir / "rubric_score.json", "w"), indent=2)
+        u = rubric_data.get("judge_usage", {}) or {}
+        print(f"  Judge usage recorded (in={u.get('input_tokens', 0)} "
+              f"out={u.get('output_tokens', 0)} "
+              f"cache_read={u.get('cache_read_input_tokens', 0)} "
+              f"cache_write={u.get('cache_creation_input_tokens', 0)})")
+    else:
+        json.dump({"rubric_score": 0.0, "error": "rubric evaluation not available"},
+                  open(attempt_dir / "rubric_score.json", "w"), indent=2)
+
+
 def start_claude_subscription_bridge(args):
     """Start the host-side Claude Code OAuth bridge and point the agent at it.
 
@@ -871,7 +912,38 @@ def start_claude_subscription_bridge(args):
     return bridge
 
 
+def load_dotenv(path=None):
+    """Load KEY=VALUE pairs from a .env file next to this script.
+
+    Stdlib only, no dependency.  Never overrides a variable that is already
+    set in the real environment, so the shell and the OAuth bridge always win
+    over the file.  Silently does nothing if the file is absent or unreadable.
+    """
+    env_path = Path(path) if path else Path(__file__).parent / ".env"
+    try:
+        if not env_path.is_file():
+            return
+        for raw in env_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            if line.startswith("export "):
+                line = line[len("export "):].lstrip()
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                value = value[1:-1]
+            if key and key not in os.environ:
+                os.environ[key] = value
+    except OSError as e:
+        print(f"  Warning: could not read {env_path}: {e}")
+
+
 def main():
+    # Load .env before the parser is built so env values become argparse defaults.
+    load_dotenv()
+
     ap = argparse.ArgumentParser(description="Run a Harbor-formatted CyberGym task (weighted scoring)")
     ap.add_argument("task_dir", help="Path to Harbor task directory (e.g. tasks/harfbuzz__arvo_62774)")
     ap.add_argument("--agent", choices=["claude-code", "openhands-sdk"], default="claude-code")
@@ -893,20 +965,24 @@ def main():
                     help="Pin the bridge shared secret (default: random per run).")
 
     # --- Finance API (opt-in usage tracking, never affects scoring) ---
-    ap.add_argument("--finance-api-url", default=None,
+    ap.add_argument("--finance-api-url", default=os.environ.get("FINANCE_API_URL"),
                     help="Odoo Finance API base URL for trajectory usage tracking. "
-                         "If omitted, no usage data is posted.")
-    ap.add_argument("--finance-project-id", default=None,
-                    help="Project ID for finance tracking (default: task name)")
-    ap.add_argument("--finance-budget-type", default="Production",
+                         "Falls back to FINANCE_API_URL in .env / environment. "
+                         "If unset, no usage data is posted.")
+    ap.add_argument("--finance-project-id", default=os.environ.get("FINANCE_PROJECT_ID", "kakashi"),
+                    help="Project ID for finance tracking (default: kakashi)")
+    ap.add_argument("--finance-project-type", default=os.environ.get("FINANCE_PROJECT_TYPE", "technical"),
+                    help="Project type: the server enforces 'generalist' or 'technical' "
+                         "(lowercase). Default: technical")
+    ap.add_argument("--finance-budget-type", default=os.environ.get("FINANCE_BUDGET_TYPE", "Production"),
                     help="Budget type: RFP or Production (default: Production)")
-    ap.add_argument("--finance-rfp-sub-type", default="",
+    ap.add_argument("--finance-rfp-sub-type", default=os.environ.get("FINANCE_RFP_SUB_TYPE", ""),
                     help="RFP sub-type (Testing/Sampling). Only when budget_type=RFP.")
-    ap.add_argument("--finance-production-mode", default="Singlephase",
+    ap.add_argument("--finance-production-mode", default=os.environ.get("FINANCE_PRODUCTION_MODE", "Singlephase"),
                     help="Production mode: Singlephase or Multiphase (default: Singlephase)")
-    ap.add_argument("--finance-team-type", default="Projects",
+    ap.add_argument("--finance-team-type", default=os.environ.get("FINANCE_TEAM_TYPE", "Projects"),
                     help="Team type for finance tracking (default: Projects)")
-    ap.add_argument("--finance-subscription-id", default="",
+    ap.add_argument("--finance-subscription-id", default=os.environ.get("FINANCE_SUBSCRIPTION_ID", ""),
                     help="Subscription ID for finance billing attribution.")
 
     args = ap.parse_args()
@@ -1025,6 +1101,8 @@ def main():
                     "skip_reason": "No poc.bin was generated by the agent",
                     "pytest_score": 0.0, "rubric_score": 0.0, "avg_score": 0.0,
                 })
+                print("  Running rubric judge for token capture (no PoC)...")
+                record_judge_usage(run_dir, attempt, task_dir, log_file, llm_env, llm_model)
                 if attempt < args.max_attempts:
                     feedback = "\n=== Previous Attempt Failed ===\nNo poc.bin was generated."
                 continue
@@ -1039,6 +1117,8 @@ def main():
                     "skip_reason": "No fix.patch was generated by the agent",
                     "pytest_score": 0.0, "rubric_score": 0.0, "avg_score": 0.0,
                 })
+                print("  Running rubric judge for token capture (no patch)...")
+                record_judge_usage(run_dir, attempt, task_dir, log_file, llm_env, llm_model)
                 if attempt < args.max_attempts:
                     feedback = "\n=== Previous Attempt Failed ===\nNo fix.patch was generated."
                 continue
@@ -1199,7 +1279,8 @@ def main():
                 task_name=task_name,
                 timestamp=timestamp,
                 model_name=llm_model,
-                project_id=getattr(args, 'finance_project_id', None) or task_name,
+                project_id=getattr(args, 'finance_project_id', None) or "kakashi",
+                project_type=getattr(args, 'finance_project_type', None) or "technical",
                 team_type=getattr(args, 'finance_team_type', "Projects"),
                 budget_type=getattr(args, 'finance_budget_type', "Production"),
                 rfp_sub_type=getattr(args, 'finance_rfp_sub_type', ""),

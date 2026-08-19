@@ -1,34 +1,55 @@
+# Derived progress cache. Never authoritative; reconstructable from audit artifacts.
+
+run:
+  instrument: CRUCIBLE
+  kind: UPDATE
+  invoked_at: "2026-08-18T00:00:00Z"
+
 phases:
   - id: R
     status: complete
-    notes: research corpus at trinity/research/ reviewed (20 papers); no audit/research/ staging needed
+    notes: "Research corpus at trinity/research/ reviewed (21 paired pdf+md papers). No audit/research/ staging needed."
     artifacts: []
 
   - id: "0"
     status: complete
+    notes: "Re-scoped against c743ff4. Prior scope migrated to audit/lineage/scope.1c388d4.yaml, not clobbered."
     artifacts:
       - audit/scope.yaml
       - audit/capabilities.yaml
-    scope_sha256: 8fe3aad51feba33a607430efc6b0bec78735b66f0d906e15e4fbf9e56e146529
+      - audit/iteration.log.md
+      - audit/lineage/scope.1c388d4.yaml
+    scope_sha256: 7bca974b4481ed7aef734870afdc9384be1c0bccb47242f8552b345973c6c776
+    coverage_gaps: 5
 
   - id: "0.5"
     status: pending_approval
-    notes: scope approval gate awaiting human sign-off
+    notes: "Re-fired. The prior digest 8fe3aad5 is superseded and any signature over it is void. No gate_approver role exists, so this gate is human."
     instruction: >
-      echo '8fe3aad51feba33a607430efc6b0bec78735b66f0d906e15e4fbf9e56e146529' > audit/scope.approved
+      echo '7bca974b4481ed7aef734870afdc9384be1c0bccb47242f8552b345973c6c776' > audit/scope.approved
 
   - id: "1"
-    status: complete_with_gaps
-    notes: audit instruments built; full scanner pipeline not runnable without pinned databases
-    artifacts:
+    status: invalidated
+    was: complete_with_gaps
+    reason: "Binding inputs moved and the gate that should have bound them was never discharged."
+    retained_artifacts:
       - audit/evidence.yaml
       - audit/provenance.yaml
+    retained_as: superseded_inputs
 
   - id: "2"
-    status: complete
-    artifacts:
+    status: invalidated
+    was: complete
+    was_disposition: HOLD
+    reason: "Derived against absent bytes under an unapproved scope."
+    retained_artifacts:
       - audit/findings.yaml
       - audit/review.md
       - audit/TODO.md
       - VERDICT.md
-    disposition: HOLD
+    retained_as: suspended_claims
+
+waiting_on:
+  gate: "0.5"
+  artifact: audit/scope.yaml
+  digest: 7bca974b4481ed7aef734870afdc9384be1c0bccb47242f8552b345973c6c776

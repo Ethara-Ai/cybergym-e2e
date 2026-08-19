@@ -1,0 +1,90 @@
+# FORGE batch record. One invocation opens exactly one batch of at least twenty
+# task slots. This invocation opened none: the preconditions that must hold
+# before scoping were not met, and rule 7 fails closed.
+#
+# Disposition correction, 2026-08-18. An earlier revision of this file recorded
+# BLOCK:INFEASIBLE_OR_UNVERIFIED. That was wrong. The Dispositions section binds
+# that value to "no pilot may be submitted until the feasibility bundle passes",
+# which presupposes a scoped task whose feasibility was tested and failed. No
+# task was ever scoped here, so the value asserted something untrue. The same
+# section assigns this exact condition explicitly: "An unresolvable FORGE_VIEW
+# caps here: a projection FORGE cannot read leaves the bundle unproven against
+# standing direction rather than proven without it." The cap is therefore
+# HOLD:PILOT_REQUIRED, carrying named coverage-gap reasons, which the contract
+# states are "named coverage-gap reasons, never dispositions of their own".
+
+batch:
+  id: null
+  opened: false
+  slots_requested: 20
+  slots_opened: 0
+  invoked_at: "2026-08-18T00:00:00Z"
+  disposition: "HOLD:PILOT_REQUIRED"
+  terminal: false
+  reasons: [forge-view-unresolvable, cohort-refresh-overdue, screening-unverified]
+  superseded_disposition: "BLOCK:INFEASIBLE_OR_UNVERIFIED"
+  superseded_reason: "Misapplied. That value binds a failed feasibility bundle, and no bundle was scoped."
+
+preconditions:
+  - id: PRE-F-001
+    caps_at: "HOLD:PILOT_REQUIRED"
+    contract_basis: "Dispositions, HOLD:PILOT_REQUIRED: an unresolvable FORGE_VIEW caps here."
+    rule: "Non-negotiable rule 1"
+    requirement: "Before scoping, read standing direction only through the read-only FORGE_VIEW at memory/forge_view.yaml."
+    satisfied: false
+    detail: "memory/forge_view.yaml does not exist. ENGRAM is parked at its own Phase 0.5 gate and has not reached Phase 1, which is where the projections are computed. Rule 1 also forbids reading memory/ledger.yaml or any CRUCIBLE surface as a substitute, so there is no lawful alternative source for live failure modes, the frontier floor, or stale levers."
+    caps_run: true
+  - id: PRE-F-002
+    rule: "Non-negotiable rule 4"
+    requirement: "Read requirements/ first and touchstones/ second on every invocation."
+    satisfied: false
+    detail: "Neither directory exists. Both are human-write-only inputs that FORGE must never author."
+    caps_run: true
+  - id: PRE-F-003
+    rule: "Non-negotiable rule 11"
+    requirement: "Every slot is designed against the Frontier-defeat tier; a lower target tier is lawful only through an explicit grant in requirements/."
+    satisfied: false
+    detail: "Frontier-defeat floors are read from FORGE_VIEW under Hardness rule 2a, and projected thresholds may only be raised, never lowered. With no view there is no floor, and with no requirements/ there is no grant path either."
+    caps_run: true
+  - id: PRE-F-004
+    caps_at: "HOLD:PILOT_REQUIRED"
+    reason_token: cohort-refresh-overdue
+    contract_basis: "Dispositions, HOLD:PILOT_REQUIRED: a raised cohort:required, an unresolvable cohort-registry projection, or a passed refresh deadline caps here with reason cohort-refresh-overdue."
+    rule: "Non-negotiable rule 9"
+    requirement: "Cohort currency reaches FORGE only through FORGE_VIEW: registry identity, snapshot digest, sequence, effective date, validity end, refresh deadline, required_cohort, cohort:required flag."
+    satisfied: false
+    detail: "No cohort is pinned anywhere in the project. memory/scope.yaml records ledger_shape.classification UNPINNED and gap GAP-E-007. Rule 9 forbids resolving a registry or provider announcement directly."
+    caps_run: true
+  - id: PRE-F-005
+    rule: "Non-negotiable rule 3b"
+    requirement: "Follow the relevant playbook when authoring a task."
+    satisfied: false
+    detail: "playbooks/ does not exist. ENGRAM is its sole scaffolder; FORGE never creates it."
+    caps_run: false
+    surfaced_as: named_playbook_gap
+  - id: PRE-F-006
+    rule: "Non-negotiable rule 5"
+    requirement: "Re-sample requirements/, touchstones/ and dataset/ on every invocation and reconcile the differential."
+    satisfied: partial
+    detail: "Re-sampled. All three are absent. dataset/ was present at the time of the prior CRUCIBLE audit and is now gone, so there is no existing bundle to reconcile and no UPDATE path either."
+    caps_run: false
+
+satisfied_preconditions:
+  - id: PRE-F-007
+    rule: "Non-negotiable rule 8"
+    requirement: "Use FORGE_TASK_NAMESPACE read-only."
+    value: c53e8f3b-526f-52c0-a04e-89e2269b237d
+    satisfied: true
+
+not_attempted:
+  - "seed/contract.yaml. This is the artifact the Phase 0.5 gate signs. Authoring it would mean asserting an archetype, a lever set, a tier and a frontier floor that FORGE has no lawful source for. Rule 6 forbids authored difficulty; writing a contract from an absent view would be exactly that."
+  - "dataset/<uuid>/ bundles. Phase 0 item 10 stops before any bundle file, and no scope exists to bind them."
+  - "seed/pilot.yaml, seed/feasibility.yaml, seed/proof.yaml, seed/defense.yaml. All are post-scope artifacts."
+
+upstream_material_available:
+  note: "Recorded so the block is understood as a missing-input block, not a missing-material block. Should the preconditions be met, source material for authoring is present and intact."
+  projects: 139
+  project_files: 5659
+  tree_digest: 9e2a325b752793d3aea6d8023897d17b23645f37c33f4fe8e432e5fc5a32a65f
+  generator: convert_to_harbor.py
+  templates: 9

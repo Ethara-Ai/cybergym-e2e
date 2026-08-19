@@ -1,0 +1,229 @@
+project:
+  root: /Users/apple/Desktop/Harness/project/cybergym-e2e
+  git_sha: 1c388d465739ed3d5665bd8e3d0ef1f5f21acf6b
+  dirty: true
+  dirty_files:
+    - run_harbor.py
+  untracked:
+    - .serena/
+    - dataset
+    - scripts/finance_client.py
+    - trinity
+  trinity_pinned_sha: 6757043b74cb7f76148983e979e491e7d943b555
+  scoped_at: "2026-08-18T16:00:00Z"
+
+ecosystems:
+  - python
+  - docker
+  - c
+  - cpp
+  - shell
+
+product_types:
+  - security_benchmark
+  - agent_harness
+  - vulnerability_discovery_eval
+
+surfaces:
+  harness_code:
+    files:
+      - run_harbor.py
+      - convert_to_harbor.py
+      - scripts/run_agent.py
+      - scripts/validate.py
+      - scripts/utils.py
+      - scripts/run_sdk_agent.py
+      - scripts/finance_client.py
+      - scripts/batch_run.sh
+      - scripts/batch_validate.sh
+      - scripts/claude_oauth/
+    present: true
+
+  task_bundles:
+    format: harbor
+    schema_version: "1.1"
+    count: 10
+    bundles:
+      - name: curl__arvo_66012
+        image: "gcr.io/oss-fuzz-base/base-builder@sha256:8eda74a11e800aead5a041ee479a65b33dab3150d6e89e5694e2b6eb27be98fc"
+        image_pinned: true
+        allow_internet: false
+      - name: espeak-ng__OSV-2023-984
+        image: "n132/arvo:62774-fix"
+        image_pinned: false
+        allow_internet: false
+      - name: exiv2__arvo_45993
+        image: "n132/arvo:45993-fix"
+        image_pinned: false
+        allow_internet: false
+      - name: ghostscript__arvo_44406
+        image: "n132/arvo:44406-fix"
+        image_pinned: false
+        allow_internet: false
+      - name: harfbuzz__arvo_62774
+        image: "n132/arvo:62774-fix"
+        image_pinned: false
+        allow_internet: false
+      - name: hdf5__arvo_58701
+        image: "n132/arvo:58701-fix"
+        image_pinned: false
+        allow_internet: false
+      - name: irssi__arvo_31491
+        image: "gcr.io/oss-fuzz-base/base-builder@sha256:8eda74a11e800aead5a041ee479a65b33dab3150d6e89e5694e2b6eb27be98fc"
+        image_pinned: true
+        allow_internet: true
+      - name: opensc__arvo_64898
+        image: "n132/arvo:64898-fix"
+        image_pinned: false
+        allow_internet: false
+      - name: pcapplusplus__arvo_43408
+        image: "n132/arvo:43408-fix"
+        image_pinned: false
+        allow_internet: false
+      - name: quickjs__oss-fuzz_416298149
+        image: "cybergym/e2e:quickjs"
+        image_pinned: false
+        allow_internet: false
+    present: true
+
+  ground_truth:
+    location: tasks/*/solution/
+    contents:
+      - fix.patch
+      - poc.bin
+    provenance_file: absent
+    truth_md: absent
+    rubrics_json: absent
+    oracle: absent
+    present: true
+
+  verifier:
+    location: tasks/*/tests/
+    contents:
+      - test.sh
+      - test_output.py
+      - validate.py
+      - rubric.json
+      - test_weights.json
+      - data/poc.bin
+    scoring: weighted_sum
+    reward_range: [-1.0, 1.0]
+    present: true
+
+  rubric:
+    location: tasks/*/tests/rubric.json
+    type: llm_judge
+    judge_model: claude-sonnet-4-20250514
+    present: true
+
+  containers:
+    count: 10
+    base_images:
+      - "gcr.io/oss-fuzz-base/base-builder"
+      - "n132/arvo"
+      - "cybergym/e2e"
+    run_as_root: true
+    user_directive: absent
+    present: true
+
+  trajectories:
+    location: agent_output/
+    present: true
+
+  git_history:
+    commits: 7
+    present: true
+
+  credentials:
+    env_file: .env
+    gitignored: true
+    contains_tokens: true
+    present: true
+
+  requirements:
+    present: false
+    empty: true
+
+  touchstones:
+    present: false
+    empty: true
+
+  crucible_view:
+    present: false
+    empty: true
+
+  samples:
+    present: false
+
+required_instruments:
+  - python_scanners
+  - docker_scanners
+  - schema_checks
+  - leakage_checks
+  - contamination_screening
+  - secret_scanning
+  - delivery_conformance
+  - verifier_robustness
+  - rubric_compilation
+
+reference_emulation:
+  present: false
+  reason: greenfield
+
+verifier_robustness:
+  present: true
+  signals:
+    - committed parser at tests/test_output.py
+    - scores derived from parsed test pass/fail
+    - patch-apply with multiple strip levels
+    - weighted scoring from test_weights.json
+
+rubric:
+  present: true
+  signals:
+    - committed rubric at tests/rubric.json
+    - runtime criterion loading in run_harbor.py evaluate_rubric()
+    - rewards mixing deterministic outcomes with per-criterion judgments
+
+contamination_screen:
+  applicable: true
+  atoms:
+    exclusion_matching: applicable
+    freeze_holdout: applicable
+    near_duplicate_screening: applicable
+    sanitization: applicable
+    empty_submission_validation: applicable
+    per_unit_provenance: applicable
+  notes: all tasks derived from public OSS-Fuzz/arvo vulnerability reports
+
+coverage_gaps:
+  - id: GAP-001
+    description: no crucible_view.yaml - cannot bind projected values
+    cap: HOLD
+  - id: GAP-002
+    description: no requirements files - no human requirements to bind
+    cap: HOLD
+  - id: GAP-003
+    description: no touchstones - no reference verdicts to reconcile
+    cap: HOLD
+  - id: GAP-004
+    description: no provenance files in solution/ directories
+    cap: HOLD
+  - id: GAP-005
+    description: no samples/ directory - no curated subset to reconcile
+    cap: HOLD
+  - id: GAP-006
+    description: git tree is dirty - uncommitted changes to run_harbor.py
+    cap: HOLD
+  - id: GAP-007
+    description: 8 of 10 Docker images lack sha256 digest pins
+    cap: HOLD
+  - id: GAP-008
+    description: no execution attestation available
+    cap: HOLD
+  - id: GAP-009
+    description: no scanner databases pinned
+    cap: HOLD
+
+capabilities:
+  reference: audit/capabilities.yaml

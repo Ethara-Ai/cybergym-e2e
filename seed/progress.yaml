@@ -1,0 +1,45 @@
+# Derived progress cache. Never authoritative.
+
+run:
+  instrument: FORGE
+  kind: INIT
+  invoked_at: "2026-08-18T00:00:00Z"
+
+phases:
+  - id: R
+    status: complete
+    notes: "Research reviewed from trinity/research/. Nothing staged into seed/research/: staging is for a needed absent paper, and no task is being authored."
+    artifacts: []
+
+  - id: "0"
+    status: blocked
+    notes: "Scoping never opened. Four preconditions unmet before the first scoping step, each capping the run rather than invalidating a task. See seed/batch.yaml."
+    artifacts:
+      - seed/batch.yaml
+      - seed/TODO.md
+    contract_written: false
+
+  - id: "0.5"
+    status: not_reachable
+    notes: "The gate signs seed/contract.yaml, which does not exist and cannot lawfully be authored."
+
+  - id: "1"
+    status: not_started
+  - id: "2"
+    status: not_started
+  - id: "3"
+    status: not_started
+  - id: "4"
+    status: not_started
+    notes: "External pilot. Out-of-band only; no signer is configured in this project."
+  - id: "4.5"
+    status: not_started
+
+disposition: "HOLD:PILOT_REQUIRED"
+terminal: false
+reasons: [forge-view-unresolvable, cohort-refresh-overdue, screening-unverified]
+superseded_disposition: "BLOCK:INFEASIBLE_OR_UNVERIFIED"
+waiting_on:
+  blocked_by_instrument: ENGRAM
+  blocked_by_gate: "memory/approval (ENGRAM Phase 0.5)"
+  and_human_input: [requirements/, touchstones/]
