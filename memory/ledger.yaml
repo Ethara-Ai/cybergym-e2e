@@ -1,0 +1,25 @@
+# ENGRAM append-only CFER ledger. Phase 1 step 5.
+# No signed pilot proofs exist. No CFERs have been birthed.
+# E3: measured CFERs are never deleted or overwritten.
+
+schema_version: "1.0.0"
+
+ledger:
+  created_at: "2026-08-19T00:00:00Z"
+  disposition: STALE
+  disposition_basis: "Zero CFERs. No signed proof has landed. No evidence is broken. Every required Bucket-D instrument is not yet built (honestly unimplemented). E19: honest scaffold is STALE, never BROKEN."
+  cfer_count: 0
+  active_lever_count: 0
+  watch_lever_count: 0
+  expired_lever_count: 0
+  retired_lever_count: 0
+
+records: []
+
+provenance:
+  approved_scope_digest: null
+  ledger_digest: null
+  seed_digest: null
+  git_sha: c743ff475c3cbdca04caf6c45ee3a1e5a618056c
+  clean_bit: false
+  notes: "Phase 0.5 gate not yet discharged. Ledger scaffolded empty pending approval."

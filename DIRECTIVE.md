@@ -2,7 +2,9 @@
 
 **Ledger state: STALE** 🟡 pending the Phase 0.5 scope gate.
 
-**Project**: CyberGym-E2E. **Git SHA**: `c743ff475c3cbdca04caf6c45ee3a1e5a618056c` (dirty: `trinity`). **Trinity SHA**: `6757043b74cb7f76148983e979e491e7d943b555`. **Date**: 2026-08-18. **Run kind**: INIT.
+**Project**: CyberGym-E2E. **Date**: 2026-08-19. **Run kind**: POST-FIX UPDATE.
+
+**CRUCIBLE disposition**: HOLD (updated 2026-08-19 after fixes applied).
 
 **Bound artifacts**: `memory/scope.yaml` at `57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd`, `memory/hardness.yaml` at `858228976a625ac4a73c3d5e4a3cf64d214d1aff228e185fb50101bb4a6ad16c`.
 

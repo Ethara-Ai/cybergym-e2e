@@ -1,0 +1,80 @@
+# ENGRAM FORGE-facing ledger projection. Phase 1 step 7.
+# The only ledger surface FORGE may read.
+# E16: the bridge is a function. This projection is a pure function of the canonical input closure.
+# No ledger exists and no Phase 1 has run, so this projection is empty.
+
+schema_version: "1.0.0"
+
+projection:
+  status: unresolvable
+  reason: "Phase 0.5 gate not yet discharged. Phase 1 has not run. No ledger exists to project."
+  evaluated_at: "2026-08-19T00:00:00Z"
+  projection_schema_version: "1.0.0"
+  projector_digest: null
+  contract_commit: 6757043b74cb7f76148983e979e491e7d943b555
+
+canonical_input_closure:
+  ledger_bytes: null
+  supersessions_bytes: null
+  hardness_bytes: memory/hardness.yaml
+  canary_bytes: null
+  roots_bytes: memory/roots.yaml
+  evaluation_instant: "2026-08-19T00:00:00Z"
+
+lever_states: []
+
+archetype_pressure: null
+
+frontier_defeat_floor: null
+
+signed_pilot_failure_aggregates: []
+
+signed_duration_aggregates: []
+
+difficulty_freshness:
+  horizon: null
+  measurement_dates: []
+
+superseded_levers: []
+
+escalation_flags: []
+
+screening_roots:
+  exclusion_list:
+    identity: null
+    immutable_digest: null
+    authority_mode: union
+  freeze_date_table:
+    identity: null
+    immutable_digest: null
+  near_duplicate_index:
+    identity: null
+    immutable_digest: null
+    normalization_algorithm: null
+    indexed_representations: null
+    neardup_threshold: null
+  source_attestation:
+    identity: null
+    immutable_digest: null
+
+cohort_registry:
+  registry_identity: null
+  snapshot_digest: null
+  schema_version: null
+  sequence: null
+  effective_date: null
+  validity_end: null
+  refresh_deadline: null
+  required_cohort: null
+  family_flag: "cohort:required"
+  flag_reason: "No cohort registry is configured. GAP-E-007."
+
+projected_hardness_contract:
+  rows_anchored: 0
+  rows_candidate: 341
+  rows_superseded: 0
+  tier_thresholds: null
+  archetype_eligibility: null
+  notes: "Hardness catalog is authored only. No anchored rows exist. Projected from memory/hardness.yaml."
+
+notes: "FORGE reads this projection as standing direction. An unresolvable FORGE_VIEW caps FORGE at HOLD:PILOT_REQUIRED. This projection is empty because no Phase 1 has run and no ledger exists."

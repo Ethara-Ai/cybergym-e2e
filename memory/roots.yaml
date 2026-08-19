@@ -1,0 +1,93 @@
+# ENGRAM external trust-root references. Phase 1 step 8g.
+# No trust roots are configured. GAP-E-006 records this as CRITICAL.
+# E4: self-attested ingests cap below CURRENT. External signature required for CURRENT.
+# E29: four mandatory screening roots must be configured before any screening can run.
+
+schema_version: "1.0.0"
+
+trust_roots: []
+
+screening_roots:
+  exclusion_list:
+    configured: false
+    identity: null
+    content_digest: null
+    schema_version: null
+    supplier_identity: null
+    issued_at: null
+    effective_at: null
+    supersession_lineage: []
+    authority_mode: union
+    required_sets:
+      - SWE-bench
+      - SWE-bench Verified
+      - Terminal-Bench
+      - LiveCodeBench
+      - Stack lineage
+    notes: "E29 root one. A missing row caps at BROKEN, never passes. No exclusion list is configured."
+    gap: GAP-E-006
+
+  freeze_date_table:
+    configured: false
+    identity: null
+    content_digest: null
+    schema_version: null
+    supplier_identity: null
+    issued_at: null
+    effective_at: null
+    supersession_lineage: []
+    notes: "E29 root two. One versioned cutoff per named set and per release, never a universal date."
+    gap: GAP-E-006
+
+  near_duplicate_index:
+    configured: false
+    identity: null
+    content_digest: null
+    schema_version: null
+    supplier_identity: null
+    issued_at: null
+    effective_at: null
+    supersession_lineage: []
+    normalization_algorithm: null
+    indexed_representations: null
+    neardup_threshold: null
+    neardup_review_threshold: null
+    neardup_normalizations: null
+    neardup_detection_floor: null
+    neardup_floor_recall: null
+    neardup_calibration_digest: null
+    notes: "E29 root three. Pinned before either instrument processes a task. No near-duplicate index is configured."
+    gap: GAP-E-006
+
+  source_attestation:
+    configured: false
+    identity: null
+    content_digest: null
+    schema_version: null
+    supplier_identity: null
+    issued_at: null
+    effective_at: null
+    supersession_lineage: []
+    notes: "E29 root four. Names trust roots accepted for signed platform attestations of repository ancestry, source event timestamps, and generator origin."
+    gap: GAP-E-006
+
+accepted_signer_identities: []
+
+cohort_registry_issuer:
+  configured: false
+  identity: null
+  signer_identity: null
+  authorized_role: cohort_registry_issuer
+  inclusion_policy_digest: null
+  notes: "No cohort registry issuer is configured. GAP-E-007."
+  gap: GAP-E-007
+
+solver_registry_roots: []
+
+policy_roots: []
+
+gate_approver:
+  configured: false
+  identity: null
+  role: gate_approver
+  notes: "No gate approver is configured. autonomous_gates capability is at default."

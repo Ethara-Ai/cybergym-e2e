@@ -1,0 +1,26 @@
+schema_version = "1.1"
+artifacts = ["/output/poc.bin", "/output/fix.patch"]
+
+[task]
+name = "sample__fixture_00001"
+description = "Well-formed task.toml fixture for schema validation testing."
+keywords = ["security", "c", "memory-safety", "cybergym-e2e"]
+
+[metadata]
+difficulty = "medium"
+category = "Security"
+subcategory = "Vulnerability discovery"
+family = "cybergym-e2e"
+tags = ["cybergym", "e2e", "c", "fuzzing"]
+
+[verifier]
+timeout_sec = 7200.0
+environment_mode = "separate"
+
+[agent]
+timeout_sec = 5400.0
+
+[environment]
+build_timeout_sec = 900.0
+allow_internet = false
+mcp_servers = []

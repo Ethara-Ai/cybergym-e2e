@@ -1,0 +1,453 @@
+scan_date: '2026-08-19'
+post_fix: true
+fixes_applied:
+- espeak-ng validate.py added
+- POC_WARNING.md added to hdf5+pcapplusplus
+- pin_docker_images.sh created
+total_findings: 75
+by_severity:
+  HIGH: 10
+  MEDIUM: 64
+  LOW: 1
+findings:
+- source: docker
+  task: curl__arvo_66012
+  severity: MEDIUM
+  check: no_user_directive
+  detail: Dockerfile has no USER directive; container runs as root.
+- source: docker
+  task: espeak-ng__OSV-2023-984
+  severity: HIGH
+  check: image_pinning
+  detail: 'Image ''n132/arvo:62774-fix'' uses mutable tag ''62774-fix'' without @sha256:
+    digest pin.'
+- source: docker
+  task: espeak-ng__OSV-2023-984
+  severity: MEDIUM
+  check: third_party_namespace
+  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
+    be replaced without notice.
+- source: docker
+  task: espeak-ng__OSV-2023-984
+  severity: MEDIUM
+  check: no_user_directive
+  detail: Dockerfile has no USER directive; container runs as root.
+- source: docker
+  task: exiv2__arvo_45993
+  severity: HIGH
+  check: image_pinning
+  detail: 'Image ''n132/arvo:45993-fix'' uses mutable tag ''45993-fix'' without @sha256:
+    digest pin.'
+- source: docker
+  task: exiv2__arvo_45993
+  severity: MEDIUM
+  check: third_party_namespace
+  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
+    be replaced without notice.
+- source: docker
+  task: exiv2__arvo_45993
+  severity: MEDIUM
+  check: no_user_directive
+  detail: Dockerfile has no USER directive; container runs as root.
+- source: docker
+  task: ghostscript__arvo_44406
+  severity: HIGH
+  check: image_pinning
+  detail: 'Image ''n132/arvo:44406-fix'' uses mutable tag ''44406-fix'' without @sha256:
+    digest pin.'
+- source: docker
+  task: ghostscript__arvo_44406
+  severity: MEDIUM
+  check: third_party_namespace
+  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
+    be replaced without notice.
+- source: docker
+  task: ghostscript__arvo_44406
+  severity: MEDIUM
+  check: no_user_directive
+  detail: Dockerfile has no USER directive; container runs as root.
+- source: docker
+  task: harfbuzz__arvo_62774
+  severity: HIGH
+  check: image_pinning
+  detail: 'Image ''n132/arvo:62774-fix'' uses mutable tag ''62774-fix'' without @sha256:
+    digest pin.'
+- source: docker
+  task: harfbuzz__arvo_62774
+  severity: MEDIUM
+  check: third_party_namespace
+  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
+    be replaced without notice.
+- source: docker
+  task: harfbuzz__arvo_62774
+  severity: MEDIUM
+  check: no_user_directive
+  detail: Dockerfile has no USER directive; container runs as root.
+- source: docker
+  task: hdf5__arvo_58701
+  severity: HIGH
+  check: image_pinning
+  detail: 'Image ''n132/arvo:58701-fix'' uses mutable tag ''58701-fix'' without @sha256:
+    digest pin.'
+- source: docker
+  task: hdf5__arvo_58701
+  severity: MEDIUM
+  check: third_party_namespace
+  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
+    be replaced without notice.
+- source: docker
+  task: hdf5__arvo_58701
+  severity: MEDIUM
+  check: no_user_directive
+  detail: Dockerfile has no USER directive; container runs as root.
+- source: docker
+  task: irssi__arvo_31491
+  severity: MEDIUM
+  check: no_user_directive
+  detail: Dockerfile has no USER directive; container runs as root.
+- source: docker
+  task: opensc__arvo_64898
+  severity: HIGH
+  check: image_pinning
+  detail: 'Image ''n132/arvo:64898-fix'' uses mutable tag ''64898-fix'' without @sha256:
+    digest pin.'
+- source: docker
+  task: opensc__arvo_64898
+  severity: MEDIUM
+  check: third_party_namespace
+  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
+    be replaced without notice.
+- source: docker
+  task: opensc__arvo_64898
+  severity: MEDIUM
+  check: no_user_directive
+  detail: Dockerfile has no USER directive; container runs as root.
+- source: docker
+  task: pcapplusplus__arvo_43408
+  severity: HIGH
+  check: image_pinning
+  detail: 'Image ''n132/arvo:43408-fix'' uses mutable tag ''43408-fix'' without @sha256:
+    digest pin.'
+- source: docker
+  task: pcapplusplus__arvo_43408
+  severity: MEDIUM
+  check: third_party_namespace
+  detail: Image namespace 'n132' is not in the trusted set. Third-party images can
+    be replaced without notice.
+- source: docker
+  task: pcapplusplus__arvo_43408
+  severity: MEDIUM
+  check: no_user_directive
+  detail: Dockerfile has no USER directive; container runs as root.
+- source: docker
+  task: quickjs__oss-fuzz_416298149
+  severity: HIGH
+  check: image_pinning
+  detail: 'Image ''cybergym/e2e:quickjs'' uses mutable tag ''quickjs'' without @sha256:
+    digest pin.'
+- source: docker
+  task: quickjs__oss-fuzz_416298149
+  severity: MEDIUM
+  check: third_party_namespace
+  detail: Image namespace 'cybergym' is not in the trusted set. Third-party images
+    can be replaced without notice.
+- source: docker
+  task: quickjs__oss-fuzz_416298149
+  severity: MEDIUM
+  check: no_user_directive
+  detail: Dockerfile has no USER directive; container runs as root.
+- source: task
+  task: hdf5__arvo_58701
+  severity: MEDIUM
+  check: null_poc
+  detail: "solution/poc.bin is 20 null bytes \u2014 likely a placeholder, not a genuine\
+    \ exploit input."
+- source: task
+  task: hdf5__arvo_58701
+  severity: MEDIUM
+  check: duplicate_poc
+  detail: 'solution/poc.bin is byte-identical across tasks: hdf5__arvo_58701, pcapplusplus__arvo_43408
+    (sha256: de47c9b27eb8d300...).'
+- source: task
+  task: irssi__arvo_31491
+  severity: LOW
+  check: task_name_prefix
+  detail: Declared name 'cybergym-e2e/irssi__arvo_31491' uses a prefix. Other tasks
+    use bare directory name.
+- source: task
+  task: irssi__arvo_31491
+  severity: MEDIUM
+  check: internet_allowed
+  detail: allow_internet=true. Agent may access the network during vulnerability discovery.
+- source: task
+  task: pcapplusplus__arvo_43408
+  severity: MEDIUM
+  check: null_poc
+  detail: "solution/poc.bin is 20 null bytes \u2014 likely a placeholder, not a genuine\
+    \ exploit input."
+- source: task
+  task: pcapplusplus__arvo_43408
+  severity: MEDIUM
+  check: duplicate_poc
+  detail: 'solution/poc.bin is byte-identical across tasks: hdf5__arvo_58701, pcapplusplus__arvo_43408
+    (sha256: de47c9b27eb8d300...).'
+- source: runner
+  task: ''
+  severity: HIGH
+  check: network_policy_unenforced
+  detail: start_container() never applies --network=none or any Docker network restriction.
+    allow_internet from task.toml is ignored. All containers have unrestricted network
+    access.
+- source: runner
+  task: ''
+  severity: HIGH
+  check: rubric_no_multi_trial
+  detail: evaluate_rubric() makes a single LLM judge call with no multi-trial aggregation,
+    no position randomization, and no perturbation suite. rubric_score contributes
+    50% of the final reward.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: credential_on_disk
+  detail: .env contains 'AWS_BEARER_TOKEN'. While gitignored, the credential is exposed
+    if the project directory is shared, backed up, or accessed by other tools.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.
+- source: runner
+  task: ''
+  severity: MEDIUM
+  check: shell_injection
+  detail: subprocess call with shell=True and f-string interpolation. Crafted file
+    paths could inject shell commands.

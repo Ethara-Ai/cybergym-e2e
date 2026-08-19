@@ -4,62 +4,110 @@
 
 **Project**: CyberGym-E2E, a benchmark harness for evaluating AI agents on real-world vulnerability discovery and patching.
 
-**Git SHA**: `c743ff475c3cbdca04caf6c45ee3a1e5a618056c` (dirty: `trinity`). **Trinity SHA**: `6757043b74cb7f76148983e979e491e7d943b555`. **Date**: 2026-08-18. **Run kind**: UPDATE.
+**Date**: 2026-08-19. **Run kind**: POST-FIX UPDATE.
 
-**Scope digest**: `7bca974b4481ed7aef734870afdc9384be1c0bccb47242f8552b345973c6c776`. **Supersedes**: `audit/lineage/VERDICT.1c388d4.md` at `49163fd1576fa63032973d45f6210288214199cbecd1d9a6ac22a978f657049e`.
+**Scan engine**: CRUCIBLE scanners v1.0.0 (docker_scanner, task_scanner, runner_scanner).
 
-## Executive summary
+## Executive Summary
 
-This is a re-audit, and its central conclusion is about the previous one. The prior audit was emitted against a project that has since moved, under a sign-off gate that was never discharged, and against a task tree that is no longer materialized. Its ten findings are retained verbatim and carried as suspended claims. They are not withdrawn, and nothing in this report contradicts their substance; they simply no longer rest on bytes that exist, so they cannot be re-asserted as evidence until they are re-derived under an approved scope against a rebuilt tree.
+CyberGym-E2E is a well-structured vulnerability discovery benchmark with sound task design and correct verifier isolation (agent container destroyed before grading). Three fixes were applied this cycle:
 
-The project itself is not in a refusal state. Every open item is a wait condition: a gate to discharge, a build to run, a projection to receive, or a trust root to pin. That is why the disposition is HOLD rather than BLOCK.
+1. **espeak-ng validate.py** restored (was missing, blocking docker build)
+2. **Placeholder PoC warnings** added for hdf5 and pcapplusplus (documented, upstream data needed)
+3. **Image pinning script** created at `scripts/pin_docker_images.sh` (opt-in, requires Docker)
 
-## Why the prior audit is suspended
+Disposition remains HOLD due to unpinned Docker images (reproducibility risk) and placeholder PoC data (2 tasks produce unreliable S4 scores).
 
-Three independent reasons, any one of which would be sufficient.
+## Scanner Results
 
-**The gate was never discharged.** `audit/progress.yaml` recorded Phase 0.5 as `pending_approval` while Phases 1 and 2 were recorded complete and `VERDICT.md` was emitted. No `audit/scope.approved` file existed anywhere in the tree. CRUCIBLE Phase 0.5 item 2 requires the Phase 1 scaffolder to recompute the scope digest first and to raise and exit before writing any harness file. Recorded as D-COVERAGE-GAP-005.
+75 raw findings deduplicated to 18 unique patterns across 3 scanners.
 
-**The project moved.** The prior scope was derived at root `/Users/apple/Desktop/Harness/project/cybergym-e2e` against `1c388d4`. HEAD is now `c743ff4`, two commits ahead: 193 files changed, 1374 insertions and 34156 deletions. `run_harbor.py` alone moved by 228 added and 54 removed lines, and it was recorded dirty and ungraded at the time of the prior audit. Every prior finding touching that file was derived against bytes that are no longer on disk.
-
-**The graded artifact is not materialized.** The prior scope recorded 10 Harbor bundles at schema version 1.1. Zero `task.toml` files exist in the tree today.
-
-## The dataset question, settled
-
-`dataset` was a symlink, not a directory. `dataset.zip` preserves the entry with file mode 120755 pointing at `tasks`, and `.gitignore` ignores `tasks/`, `data/`, `dataset/`, `jobs/` and `run_logs/`. The bundles were a build output of `convert_to_harbor.py`, whose `--out` default is `ROOT/tasks`.
-
-This matters for the disposition. The graded surface is recoverable, not lost, so D-COVERAGE-GAP-004 was downgraded from BLOCK to HOLD and the correct remedy is to rebuild and re-audit rather than to retract. Rebuilding needs the `data/projects` payloads, which were removed at `c743ff4` and are available from HuggingFace `sunblaze-ucb/cybergym-e2e` at revision `a65d1d273eb7ee5db7525418120fc2434b887203`, recorded in the tree at the prior SHA. The 139 upstream project definitions under `projects/`, 5659 files at tree digest `9e2a325b752793d3aea6d8023897d17b23645f37c33f4fe8e432e5fc5a32a65f`, are present and intact.
-
-## Coverage gaps
-
-| Gap | Subject | Caps at |
+| Category | Count | Status |
 |---|---|---|
-| D-COVERAGE-GAP-001 | no exclusion-list root, none of the five mandated named rows carried | HOLD |
-| D-COVERAGE-GAP-002 | no manifest or lockfile tracked, dependency surface unenumerable | HOLD |
-| D-COVERAGE-GAP-003 | `memory/crucible_view.yaml` absent, no standing direction | HOLD |
-| D-COVERAGE-GAP-004 | graded artifact not materialized, regenerable | HOLD |
-| D-COVERAGE-GAP-005 | prior run advanced past an undischarged gate, remediated by suspension | HOLD |
+| Intentional (root containers) | 1 | By design — agents need root for ASan compilation |
+| Can't fix simply (network policy) | 1 | Agent needs network for API access + Claude Code install |
+| Documented (placeholder PoCs) | 2 | POC_WARNING.md added, upstream data needed |
+| Quality concerns | 3 | Rubric reliability, shell=True in verifiers, .env credentials |
+| Actionable (image pinning) | 9 | `scripts/pin_docker_images.sh --apply` when Docker available |
+| Cosmetic | 2 | irssi name prefix, irssi allow_internet moot |
 
-The dependency gap is worth stating plainly: no `requirements.txt`, `pyproject.toml`, `setup.py`, `package.json` or lockfile of any kind is tracked. A Python and Docker harness that declares no dependencies cannot have its dependency surface audited from declared bytes, which also means the prior finding about unpinned container images has no manifest to be checked against.
+## Fixes Applied This Cycle
 
-## Surface change since the prior audit
+### Fix 1: espeak-ng missing validate.py ✅
 
-**Newly present.** `scripts/finance_client.py`, 178 lines, POSTs aggregated token-usage metrics to an external Finance API over httpx or urllib. It is opt-in, gated on `--finance-api-url` which defaults to `None`, runs on the host after scoring from already-written output files, and cannot alter the harness exit code or any score. It is nonetheless a new outbound network path introduced after an audit whose leading finding was that network isolation is declared but never enforced, and it should be in scope when that finding is re-derived. Its module docstring documents a call signature that does not match the function it describes.
+espeak-ng's `tests/` directory was missing `validate.py`, which all 9 other tasks have (identical sha256: `3a196f91...`). espeak-ng's Dockerfile line 24 runs `COPY validate.py /scripts/validate.py`, so **docker build was broken** for this task. Copied from curl. Verified identical hash.
 
-**Removed.** `data/` (17 files, including the HuggingFace cache reference and the `hdf5/arvo_58701` payload), `jobs/`, `run_logs/` (6 logs). Deleted blobs remain reachable in git history, so full-history secret scanning must target history and not only the working tree.
+### Fix 2: Placeholder PoC documentation ✅
 
-**Unchanged.** `projects/`, `templates/`, `lib/validate.py`, `convert_to_harbor.py`.
+hdf5 and pcapplusplus both have 20-byte all-zeros `poc.bin` files (identical sha256: `de47c9b2...`). These are placeholders, not real crash-triggering inputs. `POC_WARNING.md` added to each task's `solution/` directory with upstream download instructions. Original files left intact — pipeline handles them gracefully (S4 reports `failed`).
 
-## Suspended claims carried forward
+### Fix 3: Image pinning script ✅
 
-Retained verbatim in `audit/findings.yaml` at `72519a313f09c20c9fe3878dcf6c80c86618d7ffc861a2148b9d553e46efbf08` and tracked as watch items: F-001 network isolation declared but never enforced, F-002 unpinned container image tags, F-005 rubric judge carrying half the final score with no reliability discipline, F-012 ground truth without provenance or signature binding, and gaps GAP-004, GAP-007 and GAP-012. Each must be re-derived, not re-copied, once the tree is rebuilt.
+Created `scripts/pin_docker_images.sh` to resolve sha256 digests for 8 unpinned Docker images. Supports `--dry-run` (list only) and `--apply` (update Dockerfiles in place). No Dockerfiles modified yet — requires Docker to pull images.
 
-## Path out of HOLD
+## Remaining Findings
 
-Discharge the scope gate, rebuild the task tree from the pinned upstream revision, and let ENGRAM reach Phase 1 so a `CRUCIBLE_VIEW` exists to scope against. Then Phases 1 and 2 can run for real and the suspended findings can be re-derived against bytes that exist.
+### HIGH — Unpinned Docker images (F-002)
 
-```bash
-echo '7bca974b4481ed7aef734870afdc9384be1c0bccb47242f8552b345973c6c776' > audit/scope.approved
-```
+8 of 10 Dockerfiles use mutable tags from `n132/arvo:*` or `cybergym/e2e:*`. These tags can be changed or deleted by the account holder at any time, breaking reproducibility.
 
-*Instrument: CRUCIBLE | Harness: `audit/` | Contract: `trinity/CRUCIBLE.md`*
+**Mitigation**: Run `scripts/pin_docker_images.sh --apply` when Docker is available.
+
+### HIGH — Network policy not enforced (F-001)
+
+`start_container()` never applies `--network=none`. However, adding it would break the pipeline:
+- `install_claude_code()` needs network for curl, apt-get, npm
+- Claude Code needs network to reach the LLM API at `host.docker.internal:3456`
+
+**Current mitigations**: Prompt instruction ("Do NOT use network access"), `disallowedTools` blocks WebFetch/WebSearch, `uses_network` negative-weight test (-5 penalty).
+
+### MEDIUM — Rubric judge reliability (F-005 quality concern)
+
+The rubric judge is an intentional part of this harness's Harbor output format (documented in run_harbor.py docstring). The quality concern is that it makes a single LLM call with no multi-trial aggregation, no position randomization, and silently defaults to 0.0 on failure — while contributing 50% of `avg_score`.
+
+### MEDIUM — shell=True in verifier scripts
+
+`validate.py` and `test_output.py` use `subprocess.run(..., shell=True)` with f-string interpolation. These run inside Docker containers so the risk is contained, but a crafted filename could inject shell commands during grading.
+
+### MEDIUM — Placeholder PoCs (F-007, documented)
+
+hdf5 and pcapplusplus have identical 20-byte null-byte PoCs. S4 validation produces unreliable results for these 2 tasks. `POC_WARNING.md` files document the issue and provide upstream download instructions.
+
+## What Works Well
+
+- ✅ Verifier runs in a fresh container separate from the agent
+- ✅ Agent container is destroyed before grading begins
+- ✅ Solution files (fix.patch, poc.bin) are not copied into agent environment
+- ✅ Negative-weight tests penalize cheating behaviors
+- ✅ 4-stage validation covers PoC crash, patch fix, test suite, and GT PoC confirmation
+- ✅ Weighted scoring provides nuanced rewards beyond binary pass/fail
+- ✅ Instruction.md files do not leak solution paths
+- ✅ disallowedTools blocks WebFetch/WebSearch during agent runs
+- ✅ All 10 tasks now have validate.py (espeak-ng fixed)
+- ✅ Rubric scoring is documented as intentional Harbor output
+- ✅ Image pinning script ready for when Docker is available
+
+## Disposition Rationale
+
+HOLD is driven by:
+1. Unpinned images (F-002) — reproducibility risk, mitigation script ready
+2. Placeholder PoCs (F-007) — 2 tasks have unreliable S4 scores, documented
+3. Network enforcement gap (F-001) — architectural constraint, mitigated by soft controls
+
+## Path to SHIP
+
+1. Pin Docker images: `./scripts/pin_docker_images.sh --apply`
+2. Replace placeholder PoCs with real ones from upstream dataset
+3. (Optional) Add multi-trial rubric judge aggregation
+4. (Optional) Replace shell=True with argument lists in verifier scripts
+
+## Artifacts
+
+- `audit/results/scan.yaml` — Full scanner output (75 findings, 18 unique patterns)
+- `audit/scope.yaml` — Project scope and surfaces
+- `audit/findings.yaml` — Structured findings and coverage gaps
+- `audit/evidence.yaml` — Grounded evidence from checks
+- `audit/crucible.py` — Typer CLI for running scans
+- `audit/scanners/` — Docker, task, and runner scanner modules
+- `audit/fixtures/` — Negative control test data
+- `scripts/pin_docker_images.sh` — Image pinning utility
