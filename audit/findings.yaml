@@ -337,8 +337,13 @@ coverage_gaps:
 
   - id: GAP-003
     description: touchstones/README.md exists but is EMPTY (no admitted touchstones)
-    cap: HOLD
-    notes: file exists with published baselines from paper, no entries admitted yet
+    status: RESOLVED
+    resolved_at: "2026-08-20"
+    resolution: >
+      7 published baselines from arXiv:2606.04460v2 Tables 3-4 admitted as
+      touchstones TS-001 through TS-007. Each entry carries source provenance,
+      model/harness/cohort label, and Admitted verdict. Status updated from
+      EMPTY to ADMITTED.
 
   - id: GAP-004
     description: no provenance files in ground truth

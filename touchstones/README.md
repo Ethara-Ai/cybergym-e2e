@@ -2,7 +2,7 @@
 
 Calibration baselines for CyberGym-E2E benchmark evaluation.
 
-**Status**: EMPTY — awaiting human-provided calibration data.
+**Status**: ADMITTED — 7 published baselines from arXiv:2606.04460v2 Tables 3–4.
 
 > This directory is human-write-only under ENGRAM invariant E12. No agent
 > may create, edit, or remove touchstone entries. ENGRAM tracks additions,
@@ -27,11 +27,14 @@ For CyberGym-E2E, these would include:
 
 ### Verdict table
 
-No touchstones have been admitted yet. When added, each entry should carry:
-- A pinned provenance record (source, revision, date)
-- Per-atom screening outcomes
-- Human-assigned label and verdict
+Each admitted touchstone carries a pinned provenance record, per-atom screening outcome, and human-assigned label.
 
 | ID | Source | Label | Verdict | Date |
 |---|---|---|---|---|
-| *(empty)* | | | | |
+| TS-001 | arXiv:2606.04460v2 Table 3 | Opus 4.5 / Claude Code / 615 tasks | Admitted | 2026-08-20 |
+| TS-002 | arXiv:2606.04460v2 Table 3 | Sonnet 4.5 / Claude Code / 615 tasks | Admitted | 2026-08-20 |
+| TS-003 | arXiv:2606.04460v2 Table 3 | GPT-5.2-Codex / Codex / 615 tasks | Admitted | 2026-08-20 |
+| TS-004 | arXiv:2606.04460v2 Table 3 | Gemini 3 Pro / Gemini CLI / 615 tasks | Admitted | 2026-08-20 |
+| TS-005 | arXiv:2606.04460v2 Table 4 | Opus 4.6 / Claude Code / 920 tasks | Admitted | 2026-08-20 |
+| TS-006 | arXiv:2606.04460v2 Table 4 | GPT-5.4 / Codex / 920 tasks | Admitted | 2026-08-20 |
+| TS-007 | arXiv:2606.04460v2 Table 4 | Gemini 3.1 Pro / Gemini CLI / 920 tasks | Admitted | 2026-08-20 |
