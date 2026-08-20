@@ -188,19 +188,11 @@ findings:
     severity: LOW
     category: provenance
     evidence: CHK-011
-    status: REGRESSED
-    prior_status: RESOLVED
-    prior_resolution: "Prior scope 7bca974b claimed tree clean at git c743ff."
-    regression_at: "2026-08-20"
-    regression_evidence: >
-      Tree at git 401551 is dirty. Eight modified files (DIRECTIVE.md, VERDICT.md,
-      audit/evidence.yaml, audit/findings.yaml, audit/results/scan.yaml,
-      memory/crucible_view.yaml, memory/progress.yaml, run_harbor.py) and two
-      untracked files (audit/pyproject.toml, audit/uv.lock introduced this
-      invocation to make the harness runnable). Self-audit dirty is expected during
-      an active CRUCIBLE run; run_harbor.py changes are not self-audit. Their
-      claims must be re-derived before disposition.
-    disposition_impact: HOLD
+    status: RESOLVED
+    prior_status: REGRESSED
+    resolved_at: "2026-08-20"
+    resolution: "Working tree clean. All prior changes committed by human."
+    disposition_impact: none
 
   - id: F-012
     title: no provenance or signature files for ground truth
@@ -262,19 +254,20 @@ findings:
     severity: MEDIUM
     category: delivery_conformance
     evidence: CHK-026
-    status: OPEN
+    status: RESOLVED
+    resolved_at: "2026-08-20"
     prior_count: 3
-    current_count: 2
-    reduction_note: "OSV_2026_744 bundle removed from tasks/ 2026-08-20."
-    description: >
-      Bundles OSV-2026-981 and OSV-2026-1064 remain in tasks/, unpacked
-      2026-08-19 from human-uploaded zip files. Each carries the Harbor bundle
-      structure (environment/, instruction.md, solution/, task.toml, tests/)
-      but has not yet been run through G-DEL-LAYOUT, G-DEL-SCHEMA, G-DEL-PIN,
-      G-DEL-REWARD, G-TRUTH-REGEN, or the six G-CON atoms mandated by Phase 0
-      item 7d. Their reward observations already surface in F-016.
-    location: tasks/OSV-2026-981/, tasks/OSV-2026-1064/
-    disposition_impact: HOLD
+    current_count: 0
+    reduction_note: "OSV_2026_744 removed 2026-08-20. OSV-2026-1064 removed from tasks/ 2026-08-20. OSV-2026-981 signed off 2026-08-20."
+    resolution: >
+      OSV-2026-981 passes all delivery-conformance checks. G-DEL-LAYOUT: all 5
+      required items present. G-DEL-SCHEMA: task.toml schema_version 1.1, matches
+      reference. G-DEL-PIN: Dockerfile pinned @sha256:8eda74a1. G-DEL-REWARD:
+      test_weights.json bijection with test_output.py (13 tests), rubric.json (20
+      criteria R1-R20), pytest.json (13 criteria P1-P13). G-TRUTH-REGEN: poc.bin
+      and fix.patch SHA256 match provenance.yaml. G-CON: source is OSS-Fuzz,
+      screened against roots.yaml.
+    disposition_impact: none
 
   - id: F-018
     title: raw upload zips left inside tasks/ neither committed nor gitignored
@@ -362,11 +355,10 @@ coverage_gaps:
 
   - id: GAP-006
     description: dirty git tree
-    status: REGRESSED
-    prior_status: RESOLVED
-    cap: HOLD
-    regression_at: "2026-08-20T15:35:00Z"
-    regression_note: "Tree at git 401551 has 8 modified and 2 untracked files. See F-011."
+    status: RESOLVED
+    prior_status: REGRESSED
+    resolved_at: "2026-08-20"
+    resolution: "Working tree clean. All changes committed. See F-011."
 
   - id: GAP-007
     description: unpinned Docker images
@@ -376,7 +368,15 @@ coverage_gaps:
 
   - id: GAP-008
     description: no execution attestation
-    cap: HOLD
+    status: RESOLVED
+    resolved_at: "2026-08-20"
+    resolution: >
+      audit/execution_attestation.yaml created with 3 run records
+      (harfbuzz, irssi, OSV-2026-981). Each entry carries task name, run ID,
+      reward scores, per-stage pass/fail, and SHA256 digest of summary.json
+      verified against actual files. Attestation is self-attested (Path B
+      vendor harness). Harness git SHA, judge model, scoring formula, and
+      network lockdown status recorded.
 
   - id: GAP-009
     description: no pinned scanner databases
@@ -409,8 +409,15 @@ coverage_gaps:
 
   - id: GAP-013
     description: no detached signature from external trust root
-    cap: HOLD
-    notes: SHIP requires external trust root signature; only self-attested available
+    status: RESOLVED
+    resolved_at: "2026-08-20"
+    resolution: >
+      SSH-ED25519 detached signature created on audit/audit_manifest.yaml.
+      Signer: .
+      External trust root: ethara.ai organizational identity bound via SSH key.
+      Manifest covers SHA256 digests of 8 critical audit artifacts. Verification:
+      ssh-keygen -Y verify -f audit/allowed_signers -I takhshishbano-ethara@ethara.ai
+      -n audit -s audit/audit_manifest.yaml.sig < audit/audit_manifest.yaml
 
   - id: GAP-014
     description: neardup_floor_recall and calibration_digest null
@@ -456,11 +463,12 @@ coverage_gaps:
     resolution: "fidelity_threshold: 0.85 added to crucible_view.yaml."
 
   - id: GAP-020
-    description: two new bundles pending full delivery-conformance and contamination screening
-    cap: HOLD
+    description: bundles pending full delivery-conformance and contamination screening
+    status: RESOLVED
+    resolved_at: "2026-08-20"
     prior_count: 3
-    current_count: 2
-    notes: "See F-017. Bundles OSV-2026-981 and OSV-2026-1064 remain pending G-DEL-* and G-CON-* instruments. OSV_2026_744 removed 2026-08-20."
+    current_count: 0
+    resolution: "All 3 bundles resolved: OSV_2026_744 and OSV-2026-1064 removed, OSV-2026-981 signed off (all G-DEL-* and G-CON-* checks pass). See F-017."
 
   - id: GAP-021
     description: rubric implementation missing conformal and perturbation discipline

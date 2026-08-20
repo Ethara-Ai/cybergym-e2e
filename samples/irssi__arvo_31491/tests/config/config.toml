@@ -1,0 +1,2 @@
+repo_to_patch = "irssi"
+immutable_files = ['tests/']

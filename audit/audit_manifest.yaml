@@ -1,0 +1,16 @@
+schema_version: 1.0.0
+type: audit_digest_manifest
+generated_at: '2026-08-20T00:00:00Z'
+git_sha: dd4386e0fc32d6d3ce4dbb87b928a4c178644e28
+signer_identity: takhshishbano-ethara@ethara.ai
+signing_method: ssh-ed25519
+digests:
+  audit/findings.yaml: eded23c5145df69b13def6a8bf5dee4b72be3d34e5321ecd754c699cb4cf29dd
+  audit/execution_attestation.yaml: 95b86b931ff26327cfbe602e01aae0bb36abda1819a9282667d640d05fececbb
+  audit/evidence.yaml: f11120411f9d4636c6e72139febbe4d70f3c1b06fc05d7b229f87c45a821ebf8
+  audit/scope.yaml: aab0084c60f6984db51c8e79f3752eee9a4aa0c44f286557495806642e5ec748
+  audit/scope.approved: 2da569538d3510b715cc481ffc45a73a15c544bf691c2327f8a0efb9e570851a
+  memory/crucible_view.yaml: 22911d866f230ae6fcd2794f845411400d2b83b322aebf9646a4cdb5aee2b943
+  requirements/benchmark.md: 3479708e5633fbd8e451ecc06a7ba250604626bdd2a88edb64d959b52b67b1db
+  touchstones/README.md: ec80650b3dae8ead4aae1364555f527b956e201cbc885d56631d9a63c6150b3b
+

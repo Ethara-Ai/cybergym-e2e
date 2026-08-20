@@ -1,4 +1,4 @@
-# Harbor ENVIRONMENT for CyberGym-E2E task freerdp__OSV-2026-1064 (mode: e2e)
+# Harbor ENVIRONMENT for CyberGym-E2E task irssi__arvo_31491 (mode: e2e)
 # Agent-visible sandbox. The ground-truth PoC, the reference patch, and the
 # VERIFIER copy of validate.py live under tests/ and are injected at grade time.
 # A SELF-TEST copy of validate.py is included here so the agent can iteratively
