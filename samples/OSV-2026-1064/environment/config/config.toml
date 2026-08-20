@@ -1,0 +1,2 @@
+repo_to_patch = "FreeRDP"
+immutable_files = ['tests/']

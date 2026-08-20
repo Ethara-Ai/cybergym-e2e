@@ -2,8 +2,50 @@
 
 run:
   instrument: FORGE
-  kind: INIT
-  invoked_at: "2026-08-18T00:00:00Z"
+  kind: UPDATE
+  invoked_at: "2026-08-20T16:00:00Z"
+  prior_init_invoked_at: "2026-08-18T00:00:00Z"
+
+preconditions_recheck:
+  performed_at: "2026-08-20T16:00:00Z"
+  results:
+    forge_view_resolvable:
+      prior: false
+      current: true
+      artifact: memory/forge_view.yaml
+      note: "FORGE_VIEW resolved 2026-08-20 with pinned cohort snapshot. All lever sets empty (zero CFERs); this is a valid resolved-empty state that FORGE may scope against."
+    cohort_pinned:
+      prior: false
+      current: true
+      artifact: memory/cohorts/snapshot_001.yaml
+      note: "Cohort snapshot_001 pins claude-opus-4-8 primary and claude-opus-4-6 secondary. Valid until 2027-02-20T00:00:00Z."
+    screening_roots_configured:
+      prior: false
+      current: true
+      artifact: memory/roots.yaml
+      note: "Four screening roots configured (exclusion_list, freeze_date_table, near_duplicate_index, source_attestation). neardup_calibration_digest still null."
+    requirements_present:
+      prior: false
+      current: draft
+      artifact: requirements/benchmark.md
+      note: "File exists but status is DRAFT. Human review and finalization required before authoritative."
+    touchstones_present:
+      prior: false
+      current: empty
+      artifact: touchstones/README.md
+      note: "File exists with published baselines from paper Tables 3-4, no touchstone bundles admitted yet."
+    engram_scope_seal:
+      prior: approved
+      current: STALE
+      note: "ENGRAM re-scoped 2026-08-20 to digest 27a8407c. memory/approval carries prior 47281587 STALE. ENGRAM Phase 0.5 must re-fire before FORGE can proceed to Phase 0.5."
+    external_signer_configured:
+      prior: false
+      current: false
+      note: "Only self-attested harness-operator@cybergym-e2e trust root. Phase 4 external pilot signing not possible."
+    neardup_calibration:
+      prior: false
+      current: false
+      note: "neardup_floor_recall and neardup_calibration_digest null. FORGE rule 25 still caps at HOLD:PILOT_REQUIRED with reason screening-unverified."
 
 phases:
   - id: R
@@ -12,8 +54,9 @@ phases:
     artifacts: []
 
   - id: "0"
-    status: blocked
-    notes: "Scoping never opened. Four preconditions unmet before the first scoping step, each capping the run rather than invalidating a task. See seed/batch.yaml."
+    status: blocked_by_upstream_seal
+    prior_status: blocked_by_preconditions
+    notes: "FORGE_VIEW is now resolvable and cohort is pinned, but ENGRAM Phase 0.5 seal is STALE (memory/approval does not match current memory/scope.yaml digest). Under FORGE rule 1 (FORGE reads only through FORGE_VIEW), a projection whose upstream authority is at a broken seal is not lawfully consumable for scoping. Additionally, requirements/ DRAFT and touchstones/ EMPTY still block per rule 4, and neardup calibration still blocks per rule 25."
     artifacts:
       - seed/batch.yaml
       - seed/TODO.md
@@ -37,9 +80,17 @@ phases:
 
 disposition: "HOLD:PILOT_REQUIRED"
 terminal: false
-reasons: [forge-view-unresolvable, cohort-refresh-overdue, screening-unverified]
+reasons:
+  - engram-seal-stale
+  - requirements-draft
+  - touchstones-empty
+  - screening-unverified
+  - external-signer-absent
+prior_reasons: [forge-view-unresolvable, cohort-refresh-overdue, screening-unverified]
 superseded_disposition: "BLOCK:INFEASIBLE_OR_UNVERIFIED"
 waiting_on:
   blocked_by_instrument: ENGRAM
-  blocked_by_gate: "memory/approval (ENGRAM Phase 0.5)"
-  and_human_input: [requirements/, touchstones/]
+  blocked_by_gate: "memory/approval (ENGRAM Phase 0.5 re-fires)"
+  engram_scope_digest_awaiting_signature: 27a8407c43eca687daa7c694f9d1c04744bd8d6d4f7b6d775824451e7c222457
+  and_human_input: [requirements/ finalization, touchstones/ admittance]
+  and_external_capability: [neardup calibration, external trust-root signer]

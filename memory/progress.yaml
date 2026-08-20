@@ -4,9 +4,11 @@
 
 run:
   instrument: ENGRAM
-  kind: INIT
-  invoked_at: "2026-08-18T00:00:00Z"
-  phase_1_run_at: "2026-08-20T00:00:00Z"
+  kind: UPDATE
+  invoked_at: "2026-08-20T16:00:00Z"
+  prior_init_invoked_at: "2026-08-18T00:00:00Z"
+  prior_phase_1_run_at: "2026-08-20T00:00:00Z"
+  update_reason: "Preflight detected moved binding inputs (project_root, git_sha) and refreshed CRUCIBLE state (audit ran 2026-08-20 under discharged scope). memory/scope.yaml re-derived to 27a8407c43eca687daa7c694f9d1c04744bd8d6d4f7b6d775824451e7c222457; prior memory/approval 47281587849b66f7 is STALE."
 
 phases:
   - id: R
@@ -14,25 +16,47 @@ phases:
     notes: "Research reviewed from trinity/research/ (21 paired pdf+md papers). Parent research/ is absent and is recorded as GAP-E-004. ENGRAM defines no Phase R section of its own; its research lane lives in Phase H."
     artifacts: []
 
-  - id: "0"
+  - id: preflight
     status: complete
+    completed_at: "2026-08-20T16:00:00Z"
+    notes: "Detected moved binding inputs (project root reverted to /Users/apple/Desktop/Harness/project/cybergym-e2e, git SHA advanced c743ff -> 401551). Detected positive deltas: 13 task bundles now in tasks/, memory/roots.yaml populated with trust root + four screening roots, memory/cohorts/snapshot_001.yaml pinned, memory/crucible_view.yaml re-projected. Prior memory/approval STALE."
+
+  - id: "0"
+    status: complete_reissued
+    completed_at: "2026-08-20T16:00:00Z"
+    prior_status: complete
+    prior_scope_sha256: 57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd
+    prior_scope_preserved_at: memory/lineage/scope.c743ff.yaml
+    scope_sha256: 27a8407c43eca687daa7c694f9d1c04744bd8d6d4f7b6d775824451e7c222457
+    capabilities_sha256: 408c2b38d635d434455b20e57bb88d6a8752b24aa4cd5530bb5423ba18eb0bf9
     artifacts:
       - memory/scope.yaml
       - memory/capabilities.yaml
       - memory/hardness.yaml
+      - memory/lineage/scope.c743ff.yaml
       - HARDNESS.md
       - DIRECTIVE.md
-    scope_sha256: 57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd
-    capabilities_sha256: 408c2b38d635d434455b20e57bb88d6a8752b24aa4cd5530bb5423ba18eb0bf9
-    coverage_gaps: 12
+    coverage_gaps_total: 12
+    coverage_gaps_resolved_or_partial: 3
+    coverage_gaps_still_open: 9
+    resolved_gaps: [GAP-E-006, GAP-E-007, GAP-E-010]
     ambiguities: 2
-    ambiguities_resolved: 1
+    ambiguities_resolved: 2
 
   - id: "0.5"
-    status: approved
-    approved_at: "2026-08-19"
-    notes: "Scope gate approved. Digest written to memory/approval. requirements/benchmark.md drafted from paper (arXiv:2606.04460v2). touchstones/README.md scaffolded with published baselines from Tables 3-4. Both are human-write-only; human must review and finalize."
-    digest: 57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd
+    status: pending_approval
+    prior_status: approved
+    prior_approved_at: "2026-08-19"
+    prior_digest: 57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd
+    prior_approval_digest_on_disk: 47281587849b66f71a79b95136cb19ec3004da4d50ad9849443e7bff8eeaf3b4
+    current_scope_digest: 27a8407c43eca687daa7c694f9d1c04744bd8d6d4f7b6d775824451e7c222457
+    seal_match: false
+    instruction: |
+      shasum -a 256 memory/scope.yaml
+      # Verify SHA matches 27a8407c43eca687daa7c694f9d1c04744bd8d6d4f7b6d775824451e7c222457
+      # Inspect memory/scope.yaml for accuracy, then discharge the seal:
+      echo '27a8407c43eca687daa7c694f9d1c04744bd8d6d4f7b6d775824451e7c222457' > memory/approval
+    notes: "Re-fires. Binding inputs (project_root, git_sha, task_bundles) moved and previously-resolved gaps GAP-E-006 and GAP-E-007 now reflected in scope. seal skill in .agents/skills/seal/ must recognise MATCH before Phase 1 machinery re-runs on the new bytes."
 
   - id: "1"
     status: complete
@@ -115,5 +139,9 @@ phases:
     notes: "AMB-E-002 resolved as Path B (vendor only). Phase G genesis is not invoked. Project is an evaluation harness, not a knowledge repository."
 
 waiting_on:
-  gate: null
-  notes: "Phase 2 complete. Phase G resolved as N/A (Path B). GAP-E-006 resolved (trust roots configured). GAP-E-007 resolved (cohort pinned). Evidence can now flow. Next: ingest pilot run results as CFERs, then run CRUCIBLE audit. FORGE remains HOLD:PILOT_REQUIRED. CRUCIBLE remains HOLD. Phase S requires CURRENT (blocked by E4 self-attested cap)."
+  gate: "0.5"
+  artifact: memory/scope.yaml
+  digest: 27a8407c43eca687daa7c694f9d1c04744bd8d6d4f7b6d775824451e7c222457
+  target_file: memory/approval
+  command: "echo '27a8407c43eca687daa7c694f9d1c04744bd8d6d4f7b6d775824451e7c222457' > memory/approval"
+  notes: "ENGRAM Phase 0.5 seal re-fires under UPDATE run. Prior Phase 1 (instruments live) and Phase 2 (conformance 15/15 passed) results remain byte-identical on disk and are re-usable once seal matches new scope digest; ledger disposition stays STALE (zero CFERs, empty proof store). CRUCIBLE ran 2026-08-20 at HOLD with 20 findings (4 HIGH). FORGE has never opened a signed batch. Phase S (scribe) still blocked by E4 self-attested cap. Real defects to fix independently of trinity gates: F-016 rubric scoring pathology, F-007 placeholder PoCs."

@@ -34,18 +34,18 @@ Phase 2 has run. The conformance suite passed 15/15 tests (7 positive, 5 negativ
 
 ## Current front line
 
-No ACTIVE levers. No frontier defeats. Zero CFERs. Zero signed proofs. No trust roots configured. No cohort pinned. The ledger honestly carries no difficulty evidence of any kind. Every claim in this project is authored prose or locally computed. The signed-evidence side of the boundary is empty.
+No ACTIVE levers. No frontier defeats. Zero CFERs. Zero signed proofs. Trust root configured (self-attested, E4 caps below CURRENT). Cohort pinned (claude-opus-4-8 primary, claude-opus-4-6 secondary). Four E29 screening roots configured and projected. The signed-evidence side of the boundary is empty but the infrastructure is ready.
 
 ## What caps STALE
 
-The ledger is STALE, not BROKEN, because no evidence is broken and all six required Bucket-D instruments are live (implemented and liveness-proven). The deterministic lane is operational but unfed. The primary drivers holding the ledger at STALE are GAP-E-006 (no trust roots, so no evidence can reach CURRENT under E1 and E4) and GAP-E-007 (no cohort pinned, so no frontier to measure against under E2). STALE will hold until external trust roots are configured and a signed pilot proof lands.
+The ledger is STALE, not BROKEN, because no evidence is broken and all six required Bucket-D instruments are live (implemented and liveness-proven). The deterministic lane is operational but unfed. GAP-E-006 resolved (trust root configured). GAP-E-007 resolved (cohort pinned). Evidence can now flow through the ledger machinery. STALE will hold until a signed pilot proof lands and reaches CURRENT under E4 (requires external signer, not self-attested).
 
 ## Peer instrument standing
 
 | Instrument | Disposition | View status | Caps at |
 |---|---|---|---|
 | FORGE | HOLD:PILOT_REQUIRED | `FORGE_VIEW` resolved | HOLD:PILOT_REQUIRED until signed pilot |
-| CRUCIBLE | HOLD | `CRUCIBLE_VIEW` resolved | HOLD until Phase 0.5 re-approval discharged |
+| CRUCIBLE | HOLD | `CRUCIBLE_VIEW` resolved | HOLD — 10 coverage gaps, path to SHIP documented |
 
 ## Hardness catalog
 

@@ -1,21 +1,48 @@
 # ENGRAM Phase 0 scope. Read-only discovery output. Binds the Phase 0.5 sign-off gate.
-# Written by an INIT run: no prior memory/ledger.yaml existed.
 
 run:
   instrument: ENGRAM
-  kind: INIT
+  kind: UPDATE
   phase: "0"
-  scoped_at: "2026-08-18T00:00:00Z"
-  evaluation_instant_utc: "2026-08-18T00:00:00Z"
-  prior_ledger_present: false
+  scoped_at: "2026-08-20T16:00:00Z"
+  evaluation_instant_utc: "2026-08-20T16:00:00Z"
+  prior_ledger_present: true
+  supersedes:
+    file: memory/lineage/scope.c743ff.yaml
+    digest: 7f4f95928c563ad8696e66376b6a13f10a7ee997870aecce3a3a83615bbe0994
+    scoped_at: "2026-08-18T00:00:00Z"
+  input_deltas:
+    project_root:
+      from: /Users/apple/Desktop/mcp/cybergym-e2e
+      to: /Users/apple/Desktop/Harness/project/cybergym-e2e
+    git_sha:
+      from: c743ff475c3cbdca04caf6c45ee3a1e5a618056c
+      to: 401551231b9100474e6fa8e449cd52c4546f8b4a
+    task_bundles_committed:
+      from: 0
+      to: 13
+    crucible_ran:
+      from: 2026-08-18 disposition HOLD under scope 8fe3aad5 at git 1c388d4
+      to: 2026-08-20 disposition HOLD under scope aab0084c at git 401551
 
 project:
-  root: /Users/apple/Desktop/mcp/cybergym-e2e
+  root: /Users/apple/Desktop/Harness/project/cybergym-e2e
   name: CyberGym-E2E
-  git_sha: c743ff475c3cbdca04caf6c45ee3a1e5a618056c
+  git_sha: 401551231b9100474e6fa8e449cd52c4546f8b4a
   dirty: true
   dirty_files:
-    - trinity
+    - DIRECTIVE.md
+    - VERDICT.md
+    - audit/evidence.yaml
+    - audit/findings.yaml
+    - audit/results/scan.yaml
+    - memory/crucible_view.yaml
+    - memory/progress.yaml
+    - run_harbor.py
+  untracked:
+    - audit/pyproject.toml
+    - audit/uv.lock
+  dirty_scope: "audit/, memory/, VERDICT.md, DIRECTIVE.md, and run_harbor.py. Self-audit and self-projection dirty during an active CRUCIBLE+ENGRAM run is expected; audit/pyproject.toml and audit/uv.lock were created 2026-08-20 to make the CRUCIBLE harness runnable."
   product_types:
     - security_benchmark
     - agent_harness
@@ -35,17 +62,23 @@ trinity_submodule:
 
 binding_inputs:
   requirements:
-    present: false
-    digest: null
+    present: true
+    status: DRAFT
+    file: requirements/benchmark.md
+    note: "File exists but status is DRAFT. Machine-drafted 2026-08-19 from arXiv:2606.04460v2. Human review and finalization required before it is authoritative input."
     gap: GAP-E-001
   touchstones:
-    present: false
-    digest: null
+    present: true
+    status: EMPTY
+    file: touchstones/README.md
+    note: "File exists with published baselines from paper Tables 3-4, no touchstone bundles admitted yet."
     gap: GAP-E-002
   dataset:
     present: false
+    task_bundles_alternative: tasks/
+    task_bundles_count: 13
     digest: null
-    note: "dataset/ absent. dataset.zip stores a single entry with mode 120755, a symlink named 'dataset' pointing at 'tasks'. .gitignore ignores tasks/, data/, dataset/, jobs/ and run_logs/, so dataset/ was a generated build output, never tracked source. Zero task.toml files exist in the tree today."
+    note: "dataset/ tree still absent. 13 bundles live under tasks/ (10 converted + 3 uploaded 2026-08-19). The bundles carry the Harbor structure (environment/, instruction.md, solution/, task.toml, tests/) and are the effective dataset surface even though the dataset/ symlink is not materialized."
     regenerable: true
     regeneration_path: "convert_to_harbor.py --all --data-root data/projects --out tasks, with payloads restored from HuggingFace sunblaze-ucb/cybergym-e2e at revision a65d1d273eb7ee5db7525418120fc2434b887203"
     gap: GAP-E-003
@@ -59,26 +92,40 @@ binding_inputs:
 
 surfaces_inventoried:
   forge:
-    seed_harness_present: false
-    task_bundles: 0
+    seed_harness_present: true
+    seed_harness_state: HOLD_PILOT_REQUIRED
+    seed_harness_batches_opened: 0
+    seed_harness_bundles_produced: 0
+    task_bundles: 13
+    task_bundles_source: human_upload_and_convert_to_harbor
     frozen_task_hashes: []
     signed_pilot_proofs: []
     pilot_plans: []
-    note: "FORGE has never run against this project. No seed/ harness, no EDICT.md."
+    seed_progress_reference: seed/progress.yaml
+    edict_reference: EDICT.md
+    note: "FORGE has been invoked (EDICT.md and seed/ scaffolded) and correctly halted at HOLD:PILOT_REQUIRED under prior conditions. 13 task bundles now exist in tasks/ but were not produced by a FORGE batch: 10 were converted from projects/ via convert_to_harbor.py before FORGE existed, and 3 (OSV_2026_*) were uploaded by a human 2026-08-19. FORGE has never opened a signed batch."
   crucible:
     audit_harness_present: true
     root_report: VERDICT.md
     disposition_recorded: HOLD
-    recorded_at: "2026-08-18T16:00:00Z"
+    recorded_at: "2026-08-20T15:52:00Z"
     recorded_project_root: /Users/apple/Desktop/Harness/project/cybergym-e2e
-    recorded_git_sha: 1c388d465739ed3d5665bd8e3d0ef1f5f21acf6b
+    recorded_git_sha: 401551231b9100474e6fa8e449cd52c4546f8b4a
+    scope_approved: true
     artifact_digests:
-      audit/scope.yaml: 8fe3aad51feba33a607430efc6b0bec78735b66f0d906e15e4fbf9e56e146529
-      audit/findings.yaml: 72519a313f09c20c9fe3878dcf6c80c86618d7ffc861a2148b9d553e46efbf08
-      audit/evidence.yaml: f2e31ac6161df89c79b678f86ad7de77560017230390a36ad8a6f648788c1457
-      VERDICT.md: 49163fd1576fa63032973d45f6210288214199cbecd1d9a6ac22a978f657049e
-    staleness: STALE
-    staleness_reason: "Audit recorded against git 1c388d4 at a different project root. HEAD is c743ff4, two commits ahead: 193 files changed, 1374 insertions, 34156 deletions, including a 282-line change to run_harbor.py and removal of every jobs/ and run_logs/ artifact. The 10 Harbor bundles the audit graded are absent from disk."
+      audit/scope.yaml: aab0084c60f6984db51c8e79f3752eee9a4aa0c44f286557495806642e5ec748
+      audit/findings.yaml: null
+      audit/evidence.yaml: null
+      VERDICT.md: null
+    findings_summary:
+      total: 20
+      high: 4
+      medium: 11
+      low: 5
+      open_or_regressed: 19
+      coverage_gaps_open: 18
+    staleness: CURRENT
+    staleness_note: "CRUCIBLE ran 2026-08-20 under scope aab0084c against current git 401551. Prior lineage preserved at audit/lineage/scope.c743ff4.yaml and audit/lineage/VERDICT.c743ff4.md. Individual artifact digests null-recorded because CRUCIBLE Phase 2 writes to these files each invocation; ENGRAM does not pin their bytes."
   authored_harness:
     generator: convert_to_harbor.py
     generator_digest: fff702a906647bf268ac76cab73bb12420d5145af1a68909f75d8884ac7646c0
@@ -245,12 +292,18 @@ coverage_gaps:
   - id: GAP-E-006
     subject: trust_roots
     severity: CRITICAL
-    statement: "No external signature trust root, no accepted signer identity, no cohort_registry_issuer, and no solver-registry root are declared. Under E1 and E4 no evidence in this project can reach CURRENT, and no difficulty claim can be raised above authored."
+    status: PARTIALLY_RESOLVED
+    resolved_at: "2026-08-20T00:00:00Z"
+    statement: "Self-attested trust root (harness-operator@cybergym-e2e) configured in memory/roots.yaml alongside four screening roots (exclusion_list, freeze_date_table, near_duplicate_index, source_attestation). E4: self-attested caps below CURRENT. External signature root still absent; SHIP disposition still unreachable in CRUCIBLE and no lever can rise above self-attested standing."
+    remaining_scope: "External signer with independent verification for CURRENT and SHIP dispositions."
     holds_ledger_at: STALE
   - id: GAP-E-007
     subject: cohort_registry
     severity: CRITICAL
-    statement: "No cohort is pinned and no registry snapshot is accepted. E2: an unpinned frontier is no frontier. No lever can be ACTIVE and no tier can be anchored."
+    status: PARTIALLY_RESOLVED
+    resolved_at: "2026-08-20T00:00:00Z"
+    statement: "Frontier cohort pinned at memory/cohorts/snapshot_001.yaml (claude-opus-4-8 primary, claude-opus-4-6 secondary). ledger_shape.classification advanced from UNPINNED to PINNED. Registry issuer identity self-attested."
+    remaining_scope: "External cohort registry authority (not self-attested) for authoritative frontier tracking. Registry issuer independence for E2 CURRENT."
     holds_ledger_at: STALE
   - id: GAP-E-008
     subject: re_audit_interval
@@ -265,8 +318,10 @@ coverage_gaps:
   - id: GAP-E-010
     subject: prior_audit_gate
     severity: HIGH
-    statement: "audit/progress.yaml records Phase 0.5 as pending_approval while Phases 1 and 2 are recorded complete and VERDICT.md was emitted. No audit/scope.approved file exists anywhere in the tree. The prior CRUCIBLE run advanced past an undischarged human sign-off gate, which CRUCIBLE Phase 0.5 item 2 forbids."
-    holds_ledger_at: STALE
+    status: RESOLVED
+    resolved_at: "2026-08-20T15:52:00Z"
+    statement: "CRUCIBLE re-scoped under fresh Phase 0 (digest aab0084c) and audit/scope.approved was discharged by the human. Prior findings suspended and re-derived under the new approved scope. Prior audit lineage preserved at audit/lineage/scope.c743ff4.yaml and audit/lineage/VERDICT.c743ff4.md."
+    holds_ledger_at: current  # ENGRAM still STALE for its own reasons (zero CFERs), not this one
   - id: GAP-E-011
     subject: parent_sanity
     severity: MEDIUM

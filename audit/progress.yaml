@@ -3,45 +3,62 @@
 run:
   instrument: CRUCIBLE
   kind: UPDATE
-  invoked_at: "2026-08-18T00:00:00Z"
+  invoked_at: "2026-08-20T15:35:00Z"
 
 phases:
-  - id: R
+  - id: preflight
     status: complete
-    notes: "Research corpus at trinity/research/ reviewed (21 paired pdf+md papers). No audit/research/ staging needed."
+    notes: "Re-sampled rule 5 inputs. Detected moved bindings: git SHA c743ff -> 401551, project root /Users/apple/Desktop/mcp/cybergym-e2e -> /Users/apple/Desktop/Harness/project/cybergym-e2e, tracked_file_count 5717 -> 5792, committed_task_bundles 0 -> 13. Detected positive delta: memory/crucible_view.yaml now present with projection.status=resolved (closes prior D-COVERAGE-GAP-003). No audit/scope.approved anywhere. Rebuilt phase state from disk. Prior Phase 0 stale, Phases 0.5, 1, 2 invalidated."
+    artifacts: []
+
+  - id: feedback
+    status: complete
+    notes: "Invocation prompt 'run crucible on this harness' is resumption, not correction. No new audit/feedback.yaml record. Prior ledger has one pending advisory unchanged."
+    artifacts: []
+
+  - id: R
+    status: deferred
+    notes: "Phase R research not re-executed this invocation. Prior research corpus at trinity/research/ (21 paired pdf+md papers) retained. No audit/research/ staging added. Recorded as advisory deferral; does not affect scope disposition."
     artifacts: []
 
   - id: "0"
     status: complete
-    notes: "Re-scoped against c743ff4. Prior scope migrated to audit/lineage/scope.1c388d4.yaml, not clobbered."
+    notes: "Re-scoped against git 401551 at the reverted root. Prior scope 7bca974b preserved byte-identical at audit/lineage/scope.c743ff4.yaml. Prior VERDICT.md preserved at audit/lineage/VERDICT.c743ff4.md. 3 new task bundles inventoried (OSV_2026_744, OSV-2026-981, OSV-2026-1064). CRUCIBLE_VIEW is now readable and its four screening roots are populated; contamination screening surface is now runnable at build-time."
     artifacts:
       - audit/scope.yaml
       - audit/capabilities.yaml
       - audit/iteration.log.md
-      - audit/lineage/scope.1c388d4.yaml
-    scope_sha256: 7bca974b4481ed7aef734870afdc9384be1c0bccb47242f8552b345973c6c776
-    coverage_gaps: 5
+      - audit/lineage/scope.c743ff4.yaml
+      - audit/lineage/VERDICT.c743ff4.md
+    scope_sha256: aab0084c60f6984db51c8e79f3752eee9a4aa0c44f286557495806642e5ec748
+    coverage_gaps: 10
+    coverage_gaps_new: 5
+    coverage_gaps_closed: 1
 
   - id: "0.5"
     status: pending_approval
-    notes: "Re-fired. The prior digest 8fe3aad5 is superseded and any signature over it is void. No gate_approver role exists, so this gate is human."
-    instruction: >
-      echo '7bca974b4481ed7aef734870afdc9384be1c0bccb47242f8552b345973c6c776' > audit/scope.approved
+    notes: "Re-fired. The prior digest 7bca974b is superseded and any signature over it is void. Autonomous gates capability is default; this gate is human-only."
+    instruction: |
+      shasum -a 256 audit/scope.yaml
+      # Verify the SHA matches aab0084c60f6984db51c8e79f3752eee9a4aa0c44f286557495806642e5ec748
+      # Inspect audit/scope.yaml for accuracy, then discharge the gate:
+      echo 'aab0084c60f6984db51c8e79f3752eee9a4aa0c44f286557495806642e5ec748' > audit/scope.approved
 
   - id: "1"
     status: invalidated
     was: complete_with_gaps
-    reason: "Binding inputs moved and the gate that should have bound them was never discharged."
+    reason: "Binding inputs moved (git SHA, root, task inventory). The gate that binds them was never discharged and must re-fire."
     retained_artifacts:
       - audit/evidence.yaml
       - audit/provenance.yaml
+      - audit/results/scan.yaml
     retained_as: superseded_inputs
 
   - id: "2"
     status: invalidated
     was: complete
     was_disposition: HOLD
-    reason: "Derived against absent bytes under an unapproved scope."
+    reason: "Derived under an unapproved scope against absent then partial bytes. Superseded by re-scope."
     retained_artifacts:
       - audit/findings.yaml
       - audit/review.md
@@ -52,4 +69,6 @@ phases:
 waiting_on:
   gate: "0.5"
   artifact: audit/scope.yaml
-  digest: 7bca974b4481ed7aef734870afdc9384be1c0bccb47242f8552b345973c6c776
+  digest: aab0084c60f6984db51c8e79f3752eee9a4aa0c44f286557495806642e5ec748
+  target_file: audit/scope.approved
+  command: "echo 'aab0084c60f6984db51c8e79f3752eee9a4aa0c44f286557495806642e5ec748' > audit/scope.approved"

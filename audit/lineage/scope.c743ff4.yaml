@@ -1,0 +1,223 @@
+# CRUCIBLE Phase 0 scope. UPDATE run: re-derived against the current tree and
+# diffed against the prior scope, which is preserved byte-identical at
+# audit/lineage/scope.1c388d4.yaml. Binds the Phase 0.5 sign-off gate.
+
+run:
+  instrument: CRUCIBLE
+  kind: UPDATE
+  phase: "0"
+  scoped_at: "2026-08-18T00:00:00Z"
+  supersedes:
+    file: audit/lineage/scope.1c388d4.yaml
+    digest: 8fe3aad51feba33a607430efc6b0bec78735b66f0d906e15e4fbf9e56e146529
+    scoped_at: "2026-08-18T16:00:00Z"
+
+project:
+  root: /Users/apple/Desktop/mcp/cybergym-e2e
+  git_sha: c743ff475c3cbdca04caf6c45ee3a1e5a618056c
+  dirty: true
+  dirty_files:
+    - trinity
+  untracked: []
+  trinity_pinned_sha: 6757043b74cb7f76148983e979e491e7d943b555
+  trinity_registered_as_submodule: false
+  tracked_file_count: 5717
+
+resume_preflight:
+  prior_gate_state: pending_approval
+  prior_gate_discharged: false
+  prior_gate_evidence: "No audit/scope.approved exists anywhere in the tree, yet audit/progress.yaml recorded Phases 1 and 2 complete and VERDICT.md was emitted."
+  binding_inputs_moved: true
+  earliest_phase_with_moved_inputs: "0"
+  invalidated_phases: ["0.5", "1", "2"]
+  rationale: "Phase 0.5 item 2 requires the Phase 1 scaffolder to recompute the scope digest first and to raise and exit before writing any harness file. The prior run did not. Independently, the project root and git SHA both moved, which re-fires the gate on its own."
+
+input_deltas:
+  project_root:
+    from: /Users/apple/Desktop/Harness/project/cybergym-e2e
+    to: /Users/apple/Desktop/mcp/cybergym-e2e
+    binding: true
+  git_sha:
+    from: 1c388d465739ed3d5665bd8e3d0ef1f5f21acf6b
+    to: c743ff475c3cbdca04caf6c45ee3a1e5a618056c
+    commits_ahead: 2
+    commit_subjects: ["changes in output", "project"]
+    files_changed: 193
+    insertions: 1374
+    deletions: 34156
+    binding: true
+  requirements:
+    present: false
+    was_present: false
+    binding: true
+  touchstones:
+    present: false
+    was_present: false
+    binding: true
+  dataset:
+    present: false
+    was_present: true
+    binding: true
+    severity: CRITICAL
+    detail: "audit/lineage/scope.1c388d4.yaml recorded 10 Harbor bundles at schema_version 1.1. The dataset/ tree is not materialized. dataset.zip preserves the entry with file mode 120755, a symlink named 'dataset' pointing at 'tasks', and .gitignore ignores tasks/, data/, dataset/, jobs/ and run_logs/. dataset/ was a build output of convert_to_harbor.py, whose --out default is ROOT/tasks, so its absence is a clean working tree rather than data loss."
+    regenerable: true
+    regeneration_path: "convert_to_harbor.py --all, with data/projects payloads restored from HuggingFace sunblaze-ucb/cybergym-e2e at revision a65d1d273eb7ee5db7525418120fc2434b887203"
+
+surface_differential:
+  unchanged:
+    - projects/            # 139 upstream ARVO/OSS-Fuzz definitions, 5659 files, tree digest 9e2a325b752793d3aea6d8023897d17b23645f37c33f4fe8e432e5fc5a32a65f
+    - templates/           # 9 Harbor templates
+    - lib/validate.py
+    - convert_to_harbor.py # sha256 fff702a906647bf268ac76cab73bb12420d5145af1a68909f75d8884ac7646c0
+  changed:
+    - path: run_harbor.py
+      delta: "+228 / -54"
+      digest: c88aa3a5e31776019521b26f5266274de507aa70cd857dfd4551fadf3cba4762
+      note: "Was recorded dirty and ungraded at audit time; now committed with substantial change. All prior run_harbor.py findings must be re-derived against these bytes."
+  newly_present:
+    - path: scripts/finance_client.py
+      lines: 178
+      class: egress
+      note: "Host-side module that POSTs aggregated token-usage metrics to an external Finance API over httpx or urllib. Opt-in: gated on --finance-api-url which defaults to None, runs after scoring from already-written output files, and cannot alter harness exit code or scores. It is nonetheless a new outbound network path introduced after the prior audit, in a project whose top prior finding was unenforced network isolation."
+    - path: VERDICT.md
+      class: root_report
+    - path: audit/
+      class: crucible_harness
+    - path: trinity
+      class: vendored_contract
+      note: "Unregistered gitlink; previously a symlink to ../trinity, a path that no longer exists."
+    - path: dataset.zip
+      class: placeholder
+  removed:
+    - path: dataset/
+      severity: CRITICAL
+      note: "The graded artifact of the prior audit."
+    - path: data/
+      files: 17
+      note: "HuggingFace dataset cache for sunblaze-ucb/cybergym-e2e plus hdf5/arvo_58701 crash.log, poc.bin, src.tgz."
+    - path: jobs/
+      note: "Per-run lock.json and result.json records."
+    - path: run_logs/
+      note: "Six agent run logs including hdf5_openhands_v2.log at 2946 lines."
+    - path: scripts/__pycache__/utils.cpython-313.pyc
+
+ecosystems: [python, docker, c, cpp, shell]
+product_types: [security_benchmark, agent_harness, vulnerability_discovery_eval]
+
+manifests_and_lockfiles:
+  found: []
+  note: "No requirements.txt, pyproject.toml, setup.py, package.json, or lockfile of any kind is tracked. The Python harness declares no dependencies and pins no versions, so no dependency-resolution instrument can run against a declared set. Recorded as D-COVERAGE-GAP-002."
+
+standing_direction:
+  source: memory/crucible_view.yaml
+  present: false
+  severity: BLOCKING
+  note: "CRUCIBLE non-negotiable rules require standing direction to arrive only through CRUCIBLE_VIEW. ENGRAM has not reached Phase 1, so no projection exists. Phase 0 items 7a, 7c, 7d and 7e each resolve their claimed scope against CRUCIBLE_VIEW and therefore cannot be closed on this run."
+
+required_instruments:
+  - id: python_scanners
+    mandated_by: "Phase 0 item 7: Python mandates Python scanners."
+    runnable: true
+    targets: [run_harbor.py, convert_to_harbor.py, lib/validate.py, "scripts/*.py"]
+  - id: container_scanners
+    mandated_by: "Phase 0 item 7: containers mandate container scanners."
+    runnable: false
+    reason: "Image references lived in task.toml files under dataset/. With dataset/ absent there is no image reference to resolve or pull."
+  - id: git_history_secret_scanning
+    mandated_by: "Phase 0 item 7: git history mandates full-history secret scanning."
+    runnable: true
+    note: "History now contains deletions of data/, jobs/ and run_logs/. Deleted blobs remain reachable in history and must be scanned there, not only in the working tree."
+  - id: dataset_schema_leakage_dedup
+    mandated_by: "Phase 0 item 7: a dataset mandates schema, leakage and dedup checks."
+    runnable: false
+    reason: "No dataset on disk."
+  - id: trajectory_reward_provenance
+    mandated_by: "Phase 0 item 7: trajectories mandate reward provenance and rollout integrity."
+    runnable: false
+    reason: "run_logs/ and jobs/ were removed at c743ff4. No trajectory or reward artifact remains in the working tree."
+  - id: node_scanners
+    mandated_by: "Phase 0 item 7"
+    runnable: false
+    reason: "No Node ecosystem present. Out of scope, not absent."
+
+reference_emulation:
+  present: true
+  detected_from: "Verifier grades against ARVO and OSS-Fuzz reproduction behaviour: run_poc.sh, compile.sh, prepare.sh and patch.diff per upstream project."
+  claimed_scope_resolvable: false
+  reason: "Claimed scope resolves against CRUCIBLE_VIEW, which is absent."
+
+verifier_robustness:
+  present: true
+  detected_from: "run_harbor.py parses runner test logs, applies patches and matches graded targets."
+  stability_trials: null
+  flakiness_trials: null
+  bound: false
+  reason: "Bindings live in task.toml under dataset/, which is absent."
+
+rubric:
+  present: true
+  detected_from: "templates/rubric.json.tmpl and templates/test_weights.json.tmpl are committed; the prior audit recorded an LLM rubric judge contributing 50 percent of final score."
+  reliability_discipline: absent
+  inherited_finding: F-005
+  inherited_gap: GAP-012
+
+contamination_screen:
+  in_scope: true
+  exempt: false
+  committed_bundles: 0
+  atoms_recorded: 0
+  note: "Phase 0 item 7d: this block has no present flag and no exempt path. A project committing no task bundle records the surface as out of scope for bundle-level atoms, which is what zero committed bundles means here. It is not an absence."
+  exclusion_list_root:
+    present: false
+    required_named_rows: [SWE-bench, "SWE-bench Verified", Terminal-Bench, LiveCodeBench, "Stack lineage"]
+    rows_carried: 0
+    finding: D-COVERAGE-GAP-001
+    caps_at: HOLD
+    note: "Phase 0 item 7f: a root carrying no named row is a D-COVERAGE-GAP capping at HOLD, never a pass. No root exists at all, and the canonical list is ENGRAM-owned."
+
+coverage_gaps:
+  - id: D-COVERAGE-GAP-001
+    subject: exclusion_list_root
+    caps_at: HOLD
+    statement: "No exclusion-list root is resolvable and none of the five mandated named rows is carried."
+  - id: D-COVERAGE-GAP-002
+    subject: dependency_manifest
+    caps_at: HOLD
+    statement: "No manifest or lockfile is tracked, so the Python and container dependency surfaces cannot be enumerated from declared bytes."
+  - id: D-COVERAGE-GAP-003
+    subject: crucible_view
+    caps_at: HOLD
+    statement: "memory/crucible_view.yaml is absent, so CRUCIBLE has no standing direction and four Phase 0 detection blocks cannot resolve their claimed scope."
+  - id: D-COVERAGE-GAP-004
+    subject: graded_artifact
+    caps_at: HOLD
+    downgraded_from: BLOCK
+    downgrade_basis: "The dataset is a regenerable build output, not lost source. Established by the file mode recorded in dataset.zip and by .gitignore."
+    statement: "The dataset the prior audit graded is not materialized in the working tree. Every bundle-level instrument, every container scan and every trajectory instrument is unrunnable until it is rebuilt. No re-audit of the graded surface is possible against current bytes, but the surface is recoverable rather than gone."
+  - id: D-COVERAGE-GAP-005
+    subject: prior_gate
+    caps_at: HOLD
+    remediation: "Remediated by this run: Phases 0.5, 1 and 2 are invalidated and the prior findings are suspended rather than re-asserted. The defect is recorded, not carried forward as an active claim."
+    statement: "The prior run emitted VERDICT.md after advancing past an undischarged Phase 0.5 gate. Its findings are retained as inherited claims, not as evidence, until re-derived under an approved scope."
+
+inherited_findings_status:
+  source: audit/findings.yaml
+  source_digest: 72519a313f09c20c9fe3878dcf6c80c86618d7ffc861a2148b9d553e46efbf08
+  status: SUSPENDED
+  reason: "Derived against git 1c388d4 at a different root, under an unapproved scope, against a dataset that no longer exists. Retained verbatim and unmodified; not re-asserted by this run."
+  retained_as_watch_items: [F-001, F-002, F-005, F-012, GAP-004, GAP-007, GAP-012]
+
+prior_verdict:
+  file: VERDICT.md
+  digest: 49163fd1576fa63032973d45f6210288214199cbecd1d9a6ac22a978f657049e
+  recorded_disposition: HOLD
+  current_standing: STALE
+  action_taken: "Left byte-identical. VERDICT.md is a Phase 2 output; this run stops at the Phase 0.5 gate and has no authority to rewrite it."
+
+disposition_projection:
+  phase_0_outcome: RE_SCOPED
+  projected_cap: HOLD
+  projected_cap_drivers: [D-COVERAGE-GAP-001, D-COVERAGE-GAP-002, D-COVERAGE-GAP-003, D-COVERAGE-GAP-004]
+  downgraded_drivers: [D-COVERAGE-GAP-004, D-COVERAGE-GAP-005]
+  basis: "No structural defect in this project warrants refusal. Every open gap is a wait condition: a gate to discharge, a tree to rebuild, a projection to receive, or a root to pin."
+  note: "Projection recorded at scope time, not a graded disposition."
