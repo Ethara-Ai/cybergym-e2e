@@ -171,12 +171,15 @@ def build_image(task_dir, tag):
     return tag
 
 
-def start_container(image, name=None, env_vars=None, network=None):
+def start_container(image, name=None, env_vars=None, network=None, cap_add=None):
     cmd = ["docker", "run", "-d", "--rm", "--platform", PLATFORM]
     if network:
         cmd.extend(["--network", network])
     else:
         cmd.extend(["--add-host", "host.docker.internal:host-gateway"])
+    if cap_add:
+        for cap in cap_add:
+            cmd.extend(["--cap-add", cap])
     if name:
         cmd.extend(["--name", name])
     if env_vars:
@@ -192,7 +195,7 @@ def install_claude_code(cid):
     install_script = """
 set -e
 curl -fsSL https://deb.nodesource.com/setup_20.x 2>/dev/null | bash - >/dev/null 2>&1
-apt-get install -y nodejs sudo >/dev/null 2>&1
+apt-get install -y nodejs sudo iptables dnsutils >/dev/null 2>&1
 pip3 install tomli boto3 >/dev/null 2>&1
 npm install -g @anthropic-ai/claude-code@2.1.91 >/dev/null 2>&1
 useradd -m -s /bin/bash agent 2>/dev/null || true
@@ -205,6 +208,52 @@ chown -R agent:agent /src /output /out /work 2>/dev/null || true
     )
     if code != 0:
         raise RuntimeError(f"Claude Code installation failed: {stderr[-500:]}")
+
+
+def lockdown_agent_network(cid, llm_env):
+    """Block all outbound traffic except to the API bridge.
+
+    Called AFTER install_claude_code (which needs network for apt/npm)
+    and BEFORE run_claude_code_agent. Only activates when using the OAuth
+    bridge (ANTHROPIC_BASE_URL pointing at host.docker.internal).
+    """
+    base_url = llm_env.get("ANTHROPIC_BASE_URL", "")
+    if "host.docker.internal" not in base_url:
+        return
+
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(base_url)
+        port = parsed.port or 443
+    except Exception:
+        return
+
+    lockdown_script = f"""
+set -e
+if ! command -v iptables >/dev/null 2>&1; then exit 0; fi
+BRIDGE_IP=$(getent ahostsv4 host.docker.internal 2>/dev/null | awk '{{print $1}}' | head -1)
+if [ -z "$BRIDGE_IP" ]; then
+    BRIDGE_IP=$(dig +short host.docker.internal A 2>/dev/null | grep -E '^[0-9]+\\.' | head -1)
+fi
+if [ -z "$BRIDGE_IP" ]; then
+    BRIDGE_IP=$(getent hosts host.docker.internal 2>/dev/null | awk '{{print $1}}' | grep -E '^[0-9]+\\.' | head -1)
+fi
+if [ -z "$BRIDGE_IP" ]; then exit 0; fi
+iptables -A OUTPUT -o lo -j ACCEPT
+iptables -A OUTPUT -d "$BRIDGE_IP" -p tcp --dport {port} -j ACCEPT
+iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A OUTPUT -j REJECT --reject-with icmp-net-unreachable
+ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
+ip6tables -A OUTPUT -p tcp --dport {port} -j ACCEPT 2>/dev/null || true
+ip6tables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+ip6tables -A OUTPUT -j REJECT 2>/dev/null || true
+"""
+    code, _, stderr = exec_run(cid, f"bash -c {shlex.quote(lockdown_script)}",
+                               "Locking down agent network", timeout=60)
+    if code == 0:
+        print(f"  Network locked: only bridge port {port} allowed")
+    else:
+        print(f"  Network lockdown skipped (iptables unavailable): {stderr[-200:]}")
 
 
 def run_claude_code_agent(cid, prompt, llm_env, timeout):
@@ -1067,10 +1116,11 @@ def main():
         cid = None
         try:
             cname = f"harbor-{uuid.uuid4().hex[:8]}"
-            cid = start_container(img_tag, name=cname)
+            cid = start_container(img_tag, name=cname, cap_add=["NET_ADMIN"])
             print(f"  Container: {cid[:12]}")
 
             install_claude_code(cid)
+            lockdown_agent_network(cid, llm_env)
 
             prompt = instruction
             if feedback and not args.no_feedback:

@@ -77,8 +77,27 @@ phases:
     conformance_tests_written: 15
 
   - id: "2"
-    status: not_started
-    notes: "Phase 2 runs the conformance suite, negative controls, and positive liveness controls. Bucket-D instruments are built but not yet proven. Phase 2 will establish liveness."
+    status: complete
+    completed_at: "2026-08-20"
+    notes: "Phase 2 complete. Conformance suite passed 15/15 (7 positive, 5 negative, 3 structural). All six Bucket-D instruments liveness-proven with both decision halves exercised on frozen fixtures. E19 satisfied. Disposition remains STALE: live but unfed. Zero CFERs, no signed evidence. freshness.yaml updated with proven bucket_d_status. TODO.md regenerated from capabilities.yaml. DIRECTIVE.md updated to PHASE-2-COMPLETE."
+    conformance_results:
+      total: 15
+      passed: 15
+      failed: 0
+      positive_controls: 7
+      negative_controls: 5
+      structural_controls: 3
+    bucket_d_liveness:
+      ingestor: true
+      signature_verifier: true
+      freshener: true
+      checkpointer: true
+      recovery_procedure: true
+      provenance_gate: true
+    artifacts:
+      - memory/freshness.yaml
+      - memory/TODO.md
+      - DIRECTIVE.md
 
   - id: H
     status: complete_day_one
@@ -96,4 +115,4 @@ phases:
 
 waiting_on:
   gate: null
-  notes: "Phase 1 complete. Phase 2 is next: run the conformance suite to prove liveness. No gate blocks Phase 2."
+  notes: "Phase 2 complete. All Bucket-D instruments liveness-proven. Next: Phase S (scribe, requires CURRENT disposition) or Phase G (genesis, requires AMB-E-002 resolution). FORGE remains HOLD:PILOT_REQUIRED. CRUCIBLE remains HOLD."

@@ -23,33 +23,33 @@ frontier_caught_flags: []
 
 bucket_d_status:
   ingestor:
-    bytes_present: false
-    implemented: false
-    liveness_proven: false
+    bytes_present: true
+    implemented: true
+    liveness_proven: true
   signature_verifier:
-    bytes_present: false
-    implemented: false
-    liveness_proven: false
+    bytes_present: true
+    implemented: true
+    liveness_proven: true
   freshener:
-    bytes_present: false
-    implemented: false
-    liveness_proven: false
+    bytes_present: true
+    implemented: true
+    liveness_proven: true
   checkpointer:
-    bytes_present: false
-    implemented: false
-    liveness_proven: false
+    bytes_present: true
+    implemented: true
+    liveness_proven: true
   recovery_procedure:
-    bytes_present: false
-    implemented: false
-    liveness_proven: false
+    bytes_present: true
+    implemented: true
+    liveness_proven: true
   provenance_gate:
-    bytes_present: false
-    implemented: false
-    liveness_proven: false
+    bytes_present: true
+    implemented: true
+    liveness_proven: true
 
 disposition: STALE
-disposition_basis: "Zero CFERs. No signed proof has landed. No evidence is broken. Every required Bucket-D instrument is honestly unimplemented (implemented: false). E19: an honestly unimplemented zero-CFER scaffold is STALE, never BROKEN. No instrument claims implemented status, so no instrument is inert and no row is theater."
-not_broken_because: "BROKEN requires signature failure, unverifiable proof, non-identical recompute, mutable provenance, unmeasured or frontier-caught ACTIVE, or inert required Bucket-D machinery. Inert means present but hardcoded to reject every valid input. This project has no ACTIVE lever, no bad evidence, and no inert instrument."
+disposition_basis: "Zero CFERs. No signed proof has landed. No evidence is broken. All six required Bucket-D instruments are implemented and liveness-proven by the Phase 2 conformance suite (15/15 pass: 7 positive, 5 negative, 3 structural). E19 both-halves liveness proof satisfied. The deterministic lane is live and simply unfed. STALE because no signed evidence exists, not because instruments are missing."
+not_broken_because: "BROKEN requires signature failure, unverifiable proof, non-identical recompute, mutable provenance, unmeasured or frontier-caught ACTIVE, or inert required Bucket-D machinery. All six Bucket-D instruments are proven live with both decision halves exercised on frozen fixtures. No ACTIVE lever, no bad evidence, no inert instrument."
 
 hardness_catalog:
   rows_candidate: 341
