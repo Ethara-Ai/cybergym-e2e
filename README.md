@@ -54,47 +54,41 @@ sudo sysctl -w vm.mmap_rnd_bits=28
 
 ### Harbor Runner (recommended)
 
-`run_harbor.py` is the primary runner. It builds the Docker environment, installs the agent, runs it, then grades in a separate container.
+`run_harbor.py` is the primary runner. It builds the Docker environment, installs Claude Code as the agent, runs it inside a network-locked container, then grades in a separate verifier container.
 
 ```bash
-# Claude Code + Anthropic API
+# Anthropic API
 python run_harbor.py tasks/harfbuzz__arvo_62774 \
-    --agent claude-code --model-provider anthropic
+    --model-provider anthropic
 
-# Claude Code + Bedrock
+# Bedrock
 python run_harbor.py tasks/harfbuzz__arvo_62774 \
-    --agent claude-code --model-provider bedrock \
+    --model-provider bedrock \
     --bedrock-model-id $BEDROCK_MODEL_ID --aws-region us-west-2
-
-# OpenHands SDK
-python run_harbor.py tasks/harfbuzz__arvo_62774 \
-    --agent openhands-sdk --model-provider anthropic
-
-# Single attempt, no feedback loop (default)
-python run_harbor.py tasks/harfbuzz__arvo_62774 \
-    --agent claude-code --max-attempts 1
 
 # Custom model and output directory
 python run_harbor.py tasks/curl__arvo_66012 \
-    --agent claude-code --anthropic-model-id claude-sonnet-4-20250514 \
+    --anthropic-model-id claude-sonnet-4-20250514 \
     --output-dir agent_output/curl_test
 
 # With timeout override (default: 5400s / 90m)
-python run_harbor.py tasks/irssi__arvo_31491 \
-    --agent claude-code --timeout 3600
+python run_harbor.py tasks/irssi__arvo_31491 --timeout 3600
+
+# Multi-attempt with feedback
+python run_harbor.py tasks/harfbuzz__arvo_62774 --max-attempts 3
 ```
 
 ```bash
-# Claude Code + Claude Max/Pro subscription (OAuth bridge)
+# Claude Max/Pro subscription (OAuth bridge)
 python run_harbor.py tasks/harfbuzz__arvo_62774 \
     --claude-subscription --cc-bridge-port 3456
 
-# Claude Code + subscription + specific model
+# Subscription + specific model
 python run_harbor.py tasks/harfbuzz__arvo_62774 \
     --claude-subscription --cc-bridge-port 3456 \
     --anthropic-model-id claude-opus-4-6
 
-# Claude Code + subscription + pinned bridge secret
+# Subscription + pinned bridge secret
 python run_harbor.py tasks/harfbuzz__arvo_62774 \
     --claude-subscription --cc-bridge-port 3456 \
     --cc-bridge-secret my-secret
@@ -105,8 +99,8 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `task_dir` | (required) | Path to Harbor task directory |
-| `--agent` | `claude-code` | Agent to use: `claude-code` or `openhands-sdk` |
 | `--timeout` | `5400` | Agent timeout in seconds |
+| `--max-attempts` | `1` | Number of attempts (with feedback between attempts) |
 | `--model-provider` | `anthropic` | LLM provider: `anthropic` or `bedrock` |
 | `--anthropic-model-id` | `claude-opus-4-8` | Anthropic model ID |
 | `--bedrock-model-id` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID |
@@ -115,6 +109,7 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `--claude-subscription` | off | Route through the Claude Code OAuth bridge using your Max/Pro subscription (forces `--model-provider anthropic`) |
 | `--cc-bridge-port` | ephemeral | Fixed host port for the OAuth bridge |
 | `--cc-bridge-secret` | random | Pin the bridge shared secret (default: random per run) |
+| `--no-feedback` | off | Disable feedback between attempts |
 
 **Environment variables:**
 
@@ -127,6 +122,12 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials for Bedrock |
 | `AWS_SESSION_TOKEN` | AWS session token for Bedrock |
 | `AWS_BEARER_TOKEN_BEDROCK` | Bearer token for Bedrock |
+
+### Agent Network Isolation
+
+The agent container runs with `iptables`-based network lockdown: all outbound traffic is blocked except to the API bridge (the OAuth proxy or direct API endpoint). This prevents the agent from downloading solutions or using the network to look up known vulnerabilities, which would invalidate the benchmark.
+
+The lockdown is applied automatically after Claude Code is installed. The verifier container retains full network access because some tasks require downloading build dependencies during compilation.
 
 ### Claude Max/Pro Subscription Mode
 
@@ -168,20 +169,19 @@ Each run produces the following output directory:
 agent_output/<task>/<timestamp>_e2e/
 ├── summary.json              # Top-level results with all scores and stage details
 ├── output/
-│   ├── poc.bin               # Best PoC (latest successful or last attempt)
-│   ├── fix.patch             # Best patch
-│   ├── poc_attempt_N.bin     # Per-attempt PoC
-│   └── fix_attempt_N.patch   # Per-attempt patch
+│   ├── poc.bin               # Agent-generated proof-of-concept
+│   └── fix.patch             # Agent-generated patch
 ├── trajectory/
-│   └── attempt_N.log         # Agent stdout/stderr per attempt
+│   ├── agent.jsonl           # Raw Claude Code streaming output
+│   └── trajectory.json       # Structured trajectory for rubric judging
 └── verifier/
     ├── reward.txt            # Final reward as float (Harbor standard)
-    ├── reward.json           # Combined scores, stage details, test results
-    ├── ctrf.json             # Per-stage and per-test breakdown (CTRF + enriched data)
-    ├── test-stdout.txt       # Raw pytest stdout/stderr with failure reasons
-    ├── rubric_score.json     # LLM rubric judge score with criteria details
+    ├── reward.json           # Combined scores, stage details
+    ├── ctrf.json             # CTRF-format test results with per-test durations and weights
+    ├── test-stdout.txt       # Raw verifier stdout with pass/fail per test
+    ├── rubric_score.json     # LLM rubric judge score with per-criterion details, cost_usd
     ├── avg_score.json        # Average of pytest and rubric scores
-    └── attempt_N/            # Per-attempt score files
+    └── attempt_N/            # Per-attempt score files (when --max-attempts > 1)
         ├── ctrf.json
         ├── test-stdout.txt
         ├── rubric_score.json
@@ -199,10 +199,11 @@ Contains all run metadata and detailed results:
   "agent": "claude-code",
   "model": "claude-opus-4-8",
   "status": "success",
-  "reward": 0.85,
-  "pytest_score": 0.9,
-  "rubric_score": 0.8,
-  "avg_score": 0.85,
+  "reward": 0.93,
+  "pytest_score": 1.0,
+  "rubric_score": 0.87,
+  "avg_score": 0.93,
+  "best_reward": 0.93,
   "stages": {
     "stage1": { "status": "passed" },
     "stage2": { "status": "passed" },
@@ -213,9 +214,24 @@ Contains all run metadata and detailed results:
   "found_ground_truth_bug": true,
   "test_weights": { "test_stage1_poc_crashes_without_patch": 15, "..." : "..." },
   "test_results": { "test_stage1_poc_crashes_without_patch": "passed", "..." : "..." },
-  "rubric_detail": { "rubric_score": 0.8, "criteria": { "R1": { "..." : "..." } } },
+  "rubric_detail": {
+    "rubric_score": 0.87,
+    "criteria": {
+      "R1": {
+        "criterion": "...",
+        "met": true,
+        "score": 5,
+        "max_score": 5,
+        "importance": "critically_important",
+        "type": "task completion",
+        "evidence": "..."
+      }
+    },
+    "judge_usage": { "cost_usd": 0.90 }
+  },
   "attempts": [ { "attempt": 1, "stage1": "passed", "..." : "..." } ],
-  "duration_minutes": 10.27
+  "duration_seconds": 3931.2,
+  "duration_minutes": 65.52
 }
 ```
 
@@ -236,12 +252,16 @@ When the agent fails to produce required files, stages show the skip reason:
 | Task | Project | Source |
 |------|---------|--------|
 | `curl__arvo_66012` | curl | OSS-Fuzz/Arvo |
+| `espeak-ng__OSV-2023-984` | eSpeak NG | OSV |
 | `exiv2__arvo_45993` | Exiv2 | OSS-Fuzz/Arvo |
 | `ghostscript__arvo_44406` | Ghostscript | OSS-Fuzz/Arvo |
 | `harfbuzz__arvo_62774` | HarfBuzz | OSS-Fuzz/Arvo |
 | `hdf5__arvo_58701` | HDF5 | OSS-Fuzz/Arvo |
 | `irssi__arvo_31491` | Irssi | OSS-Fuzz/Arvo |
 | `opensc__arvo_64898` | OpenSC | OSS-Fuzz/Arvo |
+| `OSV_2026_744` | libdwarf | OSV |
+| `OSV-2026-981` | Grok (JPEG2000) | OSV |
+| `OSV-2026-1064` | FreeRDP | OSV |
 | `pcapplusplus__arvo_43408` | PcapPlusPlus | OSS-Fuzz/Arvo |
 | `quickjs__oss-fuzz_416298149` | QuickJS | OSS-Fuzz |
 
