@@ -1,17 +1,17 @@
-scanned_at: '2026-08-20T11:25:05.817029+00:00'
+scanned_at: '2026-08-20T12:02:04.002568+00:00'
 project_root: /Users/apple/Desktop/Harness/project/cybergym-e2e
 summaries:
   docker:
-    tasks_scanned: 4
-    total_findings: 5
-    by_check:
-      no_user_directive: 4
-      third_party_namespace: 1
-  task:
-    tasks_scanned: 4
+    tasks_scanned: 3
     total_findings: 4
     by_check:
-      task_name_mismatch: 2
+      no_user_directive: 3
+      third_party_namespace: 1
+  task:
+    tasks_scanned: 3
+    total_findings: 3
+    by_check:
+      task_name_mismatch: 1
       task_name_prefix: 1
       internet_allowed: 1
   runner:
@@ -20,12 +20,6 @@ summaries:
       credential_on_disk: 1
       shell_injection: 12
 findings:
-- scanner: docker
-  task: OSV-2026-1064
-  check: no_user_directive
-  severity: MEDIUM
-  detail: Dockerfile has no USER directive; container runs as root.
-  location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/OSV-2026-1064/environment/Dockerfile
 - scanner: docker
   task: OSV-2026-981
   check: no_user_directive
@@ -65,12 +59,6 @@ findings:
   detail: Task 'irssi__arvo_31491' uses image tag 'latest' which does not contain
     the task's own id 'arvo_31491'. Possible wrong base image.
   location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/irssi__arvo_31491/environment/Dockerfile
-- scanner: task
-  task: OSV-2026-1064
-  check: task_name_mismatch
-  severity: MEDIUM
-  detail: Declared name 'freerdp__OSV-2026-1064' does not match directory name 'OSV-2026-1064'.
-  location: /Users/apple/Desktop/Harness/project/cybergym-e2e/tasks/OSV-2026-1064/task.toml
 - scanner: task
   task: OSV-2026-981
   check: task_name_mismatch

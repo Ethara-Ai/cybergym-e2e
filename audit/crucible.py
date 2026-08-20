@@ -68,17 +68,33 @@ def _load_yaml(path: Path) -> dict:
         return yaml.safe_load(f) or {}
 
 
-def _count_findings(findings_data: dict) -> dict[str, int]:
+_RESOLVED_STATUSES = frozenset({"RESOLVED", "RESOLVED_BY_REMOVAL", "FALSE_POSITIVE"})
+
+
+def _is_open(item: dict) -> bool:
+    return item.get("status", "OPEN") not in _RESOLVED_STATUSES
+
+
+def _count_findings(findings_data: dict, *, open_only: bool = False) -> dict[str, int]:
     """Return finding counts by severity."""
     counts: dict[str, int] = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
     for f in findings_data.get("findings", []):
+        if open_only and not _is_open(f):
+            continue
         sev = f.get("severity", "MEDIUM").upper()
         counts[sev] = counts.get(sev, 0) + 1
     return counts
 
 
 def _get_disposition(findings_data: dict) -> str:
-    return findings_data.get("disposition", "UNKNOWN").upper()
+    """Compute disposition dynamically from open findings and gaps."""
+    for f in findings_data.get("findings", []):
+        if _is_open(f) and f.get("disposition_impact") == "HOLD":
+            return "HOLD"
+    for g in findings_data.get("coverage_gaps", []):
+        if _is_open(g):
+            return "HOLD"
+    return "SHIP"
 
 
 # ---------------------------------------------------------------------------
@@ -247,21 +263,23 @@ def verify(
     else:
         findings_data = _load_yaml(findings)
         disposition = _get_disposition(findings_data)
-        counts = _count_findings(findings_data)
+        counts = _count_findings(findings_data, open_only=True)
 
         # Gate: no unacknowledged HIGH findings for SHIP.
         if disposition == "SHIP" and counts.get("HIGH", 0) > 0:
             errors.append(
-                f"Disposition is SHIP but {counts['HIGH']} HIGH findings remain."
+                f"Disposition is SHIP but {counts['HIGH']} open HIGH findings remain."
             )
 
-        # All findings must reference valid evidence.
+        # All open findings must reference valid evidence.
         if context.exists():
             evidence_data = _load_yaml(context)
             evidence_ids = {
                 c.get("id") for c in evidence_data.get("checks", [])
             }
             for f in findings_data.get("findings", []):
+                if not _is_open(f):
+                    continue
                 ev = f.get("evidence", "")
                 if ev and ev.startswith("CHK-") and ev not in evidence_ids:
                     errors.append(
@@ -269,11 +287,11 @@ def verify(
                         f"which is not in {context}."
                     )
 
-        # Coverage gaps cap at HOLD.
-        gaps = findings_data.get("coverage_gaps", [])
-        if gaps and disposition == "SHIP":
+        # Open coverage gaps cap at HOLD.
+        open_gaps = [g for g in findings_data.get("coverage_gaps", []) if _is_open(g)]
+        if open_gaps and disposition == "SHIP":
             errors.append(
-                f"Disposition is SHIP but {len(gaps)} coverage gaps remain."
+                f"Disposition is SHIP but {len(open_gaps)} open coverage gaps remain."
             )
 
     # -- Evidence exists --------------------------------------------------
@@ -313,11 +331,20 @@ def report(
 
     data = _load_yaml(findings)
     disposition = _get_disposition(data)
-    counts = _count_findings(data)
+    open_counts = _count_findings(data, open_only=True)
+    total_counts = _count_findings(data)
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     scope_digest = _sha256_file(SCOPE_PATH) if SCOPE_PATH.exists() else "MISSING"
 
     flag = {"SHIP": "🟢", "HOLD": "🟡", "BLOCK": "🔴"}.get(disposition, "⚠️")
+
+    all_findings = data.get("findings", [])
+    open_findings = [f for f in all_findings if _is_open(f)]
+    resolved_findings = [f for f in all_findings if not _is_open(f)]
+
+    all_gaps = data.get("coverage_gaps", [])
+    open_gaps = [g for g in all_gaps if _is_open(g)]
+    resolved_gaps = [g for g in all_gaps if not _is_open(g)]
 
     lines = [
         f"# VERDICT — CyberGym-E2E {flag}",
@@ -328,36 +355,47 @@ def report(
         "",
         "## Summary",
         "",
-        f"| Severity | Count |",
-        f"|----------|-------|",
+        f"| | Open | Resolved | Total |",
+        f"|--|------|----------|-------|",
+        f"| Findings | {sum(open_counts.values())} | {len(resolved_findings)} | {sum(total_counts.values())} |",
+        f"| Gaps | {len(open_gaps)} | {len(resolved_gaps)} | {len(all_gaps)} |",
     ]
-    for sev in ("HIGH", "MEDIUM", "LOW"):
-        lines.append(f"| {sev} | {counts.get(sev, 0)} |")
 
-    lines.extend([
-        "",
-        "## Findings",
-        "",
-    ])
+    if open_findings:
+        lines.extend(["", "## Open Findings", ""])
+        for f in open_findings:
+            sev = f.get("severity", "MEDIUM")
+            icon = {"HIGH": "⛔", "MEDIUM": "⚠️", "LOW": "✅"}.get(sev, "⚠️")
+            lines.append(
+                f"- **{f['id']}** {icon} [{sev}] {f.get('title', 'untitled')}"
+            )
+            desc = f.get("description", "").strip()
+            if desc:
+                lines.append(f"  {desc[:200]}")
+            lines.append("")
 
-    for f in data.get("findings", []):
-        sev = f.get("severity", "MEDIUM")
-        icon = {"HIGH": "⛔", "MEDIUM": "⚠️", "LOW": "✅"}.get(sev, "⚠️")
-        lines.append(
-            f"- **{f['id']}** {icon} [{sev}] {f.get('title', 'untitled')}"
-        )
-        desc = f.get("description", "").strip()
-        if desc:
-            lines.append(f"  {desc[:200]}")
+    if open_gaps:
+        lines.extend(["## Open Coverage Gaps", ""])
+        for g in open_gaps:
+            lines.append(
+                f"- **{g['id']}** ⚠️ {g.get('description', '')} (cap: HOLD)"
+            )
         lines.append("")
 
-    # Coverage gaps.
-    gaps = data.get("coverage_gaps", [])
-    if gaps:
-        lines.extend(["## Coverage Gaps", ""])
-        for g in gaps:
+    if resolved_findings:
+        lines.extend(["## Resolved Findings", ""])
+        for f in resolved_findings:
+            status = f.get("status", "")
             lines.append(
-                f"- **{g['id']}** ⚠️ {g.get('description', '')} (cap: {g.get('cap', 'HOLD')})"
+                f"- **{f['id']}** ✅ [{status}] {f.get('title', 'untitled')}"
+            )
+        lines.append("")
+
+    if resolved_gaps:
+        lines.extend(["## Resolved Coverage Gaps", ""])
+        for g in resolved_gaps:
+            lines.append(
+                f"- **{g['id']}** ✅ {g.get('description', '')}"
             )
         lines.append("")
 
@@ -408,17 +446,20 @@ def status() -> None:
     if FINDINGS_PATH.exists():
         data = _load_yaml(FINDINGS_PATH)
         disposition = _get_disposition(data)
-        counts = _count_findings(data)
-        total = sum(counts.values())
-        gaps = len(data.get("coverage_gaps", []))
+        open_counts = _count_findings(data, open_only=True)
+        total_counts = _count_findings(data)
+        open_total = sum(open_counts.values())
+        all_total = sum(total_counts.values())
+        all_gaps = data.get("coverage_gaps", [])
+        open_gaps = [g for g in all_gaps if _is_open(g)]
 
         flag = {"SHIP": "🟢", "HOLD": "🟡", "BLOCK": "🔴"}.get(disposition, "⚠️")
         typer.echo(f"  disposition       : {flag} {disposition}")
-        typer.echo(f"  findings          : {total} total")
+        typer.echo(f"  findings          : {open_total} open / {all_total} total")
         for sev in ("HIGH", "MEDIUM", "LOW"):
-            if counts.get(sev, 0):
-                typer.echo(f"    {sev:8s}       : {counts[sev]}")
-        typer.echo(f"  coverage gaps     : {gaps}")
+            if open_counts.get(sev, 0):
+                typer.echo(f"    {sev:8s}       : {open_counts[sev]} open")
+        typer.echo(f"  coverage gaps     : {len(open_gaps)} open / {len(all_gaps)} total")
     else:
         typer.echo(f"  findings.yaml     : MISSING")
 
