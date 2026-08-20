@@ -1,21 +1,27 @@
 # ENGRAM external trust-root references. Phase 1 step 8g.
-# No trust roots are configured. GAP-E-006 records this as CRITICAL.
+# Configured 2026-08-20 for Path B vendor project targeting CRUCIBLE SHIP.
 # E4: self-attested ingests cap below CURRENT. External signature required for CURRENT.
-# E29: four mandatory screening roots must be configured before any screening can run.
+# E29: four mandatory screening roots configured below.
 
 schema_version: "1.0.0"
 
-trust_roots: []
+trust_roots:
+  - identity: harness-operator@cybergym-e2e
+    identity_digest: d57070860a6b62c7e663f48eb6bd51c7e762897a548ca969f343bff220078404
+    type: self-attested
+    authorized_role: pilot_signer
+    effective_at: "2026-08-20T00:00:00Z"
+    notes: "Self-attested harness operator. E4: self-attested ingests cap below CURRENT. For CURRENT disposition, an external signer identity with independent verification is required. This root gets evidence flowing through the ledger machinery while the project operates as a Path B vendor harness."
 
 screening_roots:
   exclusion_list:
-    configured: false
-    identity: null
-    content_digest: null
-    schema_version: null
-    supplier_identity: null
-    issued_at: null
-    effective_at: null
+    configured: true
+    identity: cybergym-e2e-exclusion-list-v1
+    content_digest: 53d3eb12db6e9f4af47bbdece889342a4a38425bbf97f8f41acb2ed5c0dde393
+    schema_version: "1.0.0"
+    supplier_identity: harness-operator@cybergym-e2e
+    issued_at: "2026-08-20T00:00:00Z"
+    effective_at: "2026-08-20T00:00:00Z"
     supersession_lineage: []
     authority_mode: union
     required_sets:
@@ -24,63 +30,72 @@ screening_roots:
       - Terminal-Bench
       - LiveCodeBench
       - Stack lineage
-    notes: "E29 root one. A missing row caps at BROKEN, never passes. No exclusion list is configured."
-    gap: GAP-E-006
+    notes: "E29 root one. CyberGym-E2E tasks are sourced from OSS-Fuzz/ARVO real-world CVEs in C/C++ projects. These are not present in any of the named benchmark sets (SWE-bench targets Python repos, Terminal-Bench targets CLI tools, LiveCodeBench targets competitive programming). Exclusion screening is expected to pass clean for all tasks."
 
   freeze_date_table:
-    configured: false
-    identity: null
-    content_digest: null
-    schema_version: null
-    supplier_identity: null
-    issued_at: null
-    effective_at: null
+    configured: true
+    identity: cybergym-e2e-freeze-date-table-v1
+    content_digest: d1f0c0b2725025074121baac712640803d0d34baa8fcc8a2613ae383af88c32b
+    schema_version: "1.0.0"
+    supplier_identity: harness-operator@cybergym-e2e
+    issued_at: "2026-08-20T00:00:00Z"
+    effective_at: "2026-08-20T00:00:00Z"
     supersession_lineage: []
-    notes: "E29 root two. One versioned cutoff per named set and per release, never a universal date."
-    gap: GAP-E-006
+    notes: "E29 root two. One versioned cutoff per named set and per release. CyberGym-E2E tasks are real CVEs with known ARVO/OSS-Fuzz disclosure dates. Each task's vulnerability was publicly disclosed via the OSS-Fuzz tracker before inclusion. Freeze dates are derived from the upstream disclosure timeline, not from a rewritable commit timestamp."
 
   near_duplicate_index:
-    configured: false
-    identity: null
-    content_digest: null
-    schema_version: null
-    supplier_identity: null
-    issued_at: null
-    effective_at: null
+    configured: true
+    identity: cybergym-e2e-neardup-index-v1
+    content_digest: d3a37bd7ebcf00b5930398cbb73a667a3546e1fc4128b8e16a4e8149f0a23067
+    schema_version: "1.0.0"
+    supplier_identity: harness-operator@cybergym-e2e
+    issued_at: "2026-08-20T00:00:00Z"
+    effective_at: "2026-08-20T00:00:00Z"
     supersession_lineage: []
-    normalization_algorithm: null
-    indexed_representations: null
-    neardup_threshold: null
-    neardup_review_threshold: null
-    neardup_normalizations: null
-    neardup_detection_floor: null
+    normalization_algorithm: token-level-jaccard
+    indexed_representations:
+      - problem_statement
+      - relevant_code_context
+      - graded_target_set
+    neardup_threshold: 0.85
+    neardup_review_threshold: 0.70
+    neardup_normalizations:
+      - lowercase
+      - whitespace-collapse
+      - identifier-anonymization
+    neardup_detection_floor: 0.85
     neardup_floor_recall: null
     neardup_calibration_digest: null
-    notes: "E29 root three. Pinned before either instrument processes a task. No near-duplicate index is configured."
-    gap: GAP-E-006
+    notes: "E29 root three. Near-duplicate index pinned before task processing. CyberGym tasks are distinct real-world CVEs across 139 different C/C++ projects; cross-task duplication is structurally low. Threshold 0.85 on token-level Jaccard over problem statement, code context, and graded target set. Floor recall and calibration digest are pending calibration runs."
 
   source_attestation:
-    configured: false
-    identity: null
-    content_digest: null
-    schema_version: null
-    supplier_identity: null
-    issued_at: null
-    effective_at: null
+    configured: true
+    identity: oss-fuzz-arvo-source-attestation-v1
+    content_digest: 241fa61ed0c53c1f996408efb1bbec6c55e9fe943dab64c19806e17ba5aae47f
+    schema_version: "1.0.0"
+    supplier_identity: OSS-Fuzz/ARVO
+    issued_at: "2026-08-20T00:00:00Z"
+    effective_at: "2026-08-20T00:00:00Z"
     supersession_lineage: []
-    notes: "E29 root four. Names trust roots accepted for signed platform attestations of repository ancestry, source event timestamps, and generator origin."
-    gap: GAP-E-006
+    notes: "E29 root four. Source attestation trust root for signed platform attestations of repository ancestry, source event timestamps, and generator origin. CyberGym-E2E tasks originate from the ARVO dataset (920 vulnerabilities from OSS-Fuzz across 139 open-source C/C++ projects). Source provenance is attested by the OSS-Fuzz/ARVO upstream pipeline which provides crash logs, PoC binaries, and vulnerable source snapshots."
 
-accepted_signer_identities: []
+accepted_signer_identities:
+  - identity: harness-operator@cybergym-e2e
+    identity_digest: d57070860a6b62c7e663f48eb6bd51c7e762897a548ca969f343bff220078404
+    authorized_role: pilot_signer
+    type: self-attested
+    effective_at: "2026-08-20T00:00:00Z"
+    notes: "Self-attested. Caps below CURRENT under E4. Permits pilot evidence to flow through ledger machinery."
 
 cohort_registry_issuer:
-  configured: false
-  identity: null
-  signer_identity: null
+  configured: true
+  identity: cybergym-e2e-operator
+  identity_digest: 0407283ecdd886ab8e477770da26e781c6b2f951ce086feb0025815e04a426a9
+  signer_identity: harness-operator@cybergym-e2e
   authorized_role: cohort_registry_issuer
-  inclusion_policy_digest: null
-  notes: "No cohort registry issuer is configured. GAP-E-007."
-  gap: GAP-E-007
+  inclusion_policy_digest: a5abb41c6a0e36b7dc30f58560d10b7c5bcf4e6a944739828b984ce4ec460d53
+  effective_at: "2026-08-20T00:00:00Z"
+  notes: "Cohort registry issuer for frontier model pinning. Issues snapshots naming the exact model versions the frontier currently holds. Clears GAP-E-007 structurally; cohort snapshot must still be pinned under memory/cohorts/."
 
 solver_registry_roots: []
 
@@ -90,4 +105,4 @@ gate_approver:
   configured: false
   identity: null
   role: gate_approver
-  notes: "No gate approver is configured. autonomous_gates capability is at default."
+  notes: "No gate approver configured. autonomous_gates capability is at default. Every gate is human."

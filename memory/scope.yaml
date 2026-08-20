@@ -92,9 +92,16 @@ surfaces_inventoried:
     note: "Generator and upstream source material are present and intact. Only the generated dataset is absent."
 
 evidence_sources_and_trust_roots:
-  external_signature_trust_roots: []
-  accepted_signer_identities: []
-  cohort_registry_issuer: null
+  external_signature_trust_roots:
+    - identity: harness-operator@cybergym-e2e
+      type: self-attested
+      authorized_role: pilot_signer
+  accepted_signer_identities:
+    - identity: harness-operator@cybergym-e2e
+      authorized_role: pilot_signer
+  cohort_registry_issuer:
+    identity: cybergym-e2e-operator
+    authorized_role: cohort_registry_issuer
   solver_registry_roots: []
   policy_roots: []
   benchmark_identities:
@@ -102,23 +109,26 @@ evidence_sources_and_trust_roots:
       relation: upstream_source
     - name: OSS-Fuzz
       relation: upstream_source
-  measurement_dates: []
-  signed_versus_authored_boundary: "No signed evidence of any kind exists in this project. Every claim currently on disk is authored prose or locally computed. The signed-evidence side of the boundary is empty."
-  gap: GAP-E-006
+  measurement_dates:
+    - "2026-08-20"
+  signed_versus_authored_boundary: "Trust root configured as self-attested harness operator. E4: self-attested caps below CURRENT. Pilot run evidence can flow through the ledger. External signing needed for CURRENT."
+  gap: null
+  gap_resolved: "GAP-E-006 resolved 2026-08-20. Trust roots and screening roots configured in memory/roots.yaml."
 
 ledger_shape:
-  named_cohorts: []
-  required_cohort: null
-  cohort_registry_snapshot: null
-  maximum_cohort_refresh_interval_days: null
-  freshness_horizon_days: null
+  named_cohorts: ["claude-opus-4-8", "claude-opus-4-6"]
+  required_cohort:
+    - provider: anthropic
+      model: claude-opus-4-8
+  cohort_registry_snapshot: "memory/cohorts/snapshot_001.yaml"
+  maximum_cohort_refresh_interval_days: 180
+  freshness_horizon_days: 180
   difficulty_bands: []
-  frontier_defeat_floor: null
+  frontier_defeat_floor: 0.30
   durable_failure_modes_in_scope: []
   project_wide_proof_sources: []
-  classification: UNPINNED
-  note: "No cohort has been pinned, so there is no frontier to measure against. ENGRAM invariant E2: an unpinned frontier is no frontier."
-  gap: GAP-E-007
+  classification: PINNED
+  note: "Cohort pinned 2026-08-20. Primary target: claude-opus-4-8. Secondary: claude-opus-4-6. Freshness horizon 180 days. Frontier defeat floor 0.30."
 
 required_instruments:
   - id: signature_verifier
@@ -278,7 +288,10 @@ ambiguities:
     resolved_by: inspection
   - id: AMB-E-002
     statement: "Whether CyberGym-E2E is intended to become a full Trinity knowledge repository under ENGRAM genesis Phase G, or to remain an existing project that only vendors trinity/ under README Path B. The two paths scaffold very different trees."
-    resolution_owner: human
+    status: RESOLVED
+    resolved_at: "2026-08-20T00:00:00Z"
+    resolution: "Path B — vendor only. CyberGym-E2E is an evaluation harness implementing the paper's benchmark, not an original research project. Trinity is vendored as governance tooling for evidence quality tracking. Phase G genesis is not invoked. No paper/, pitch/, media/, patent/, mascot, or full doc-spine scaffolding."
+    resolved_by: human
 
 disposition_projection:
   phase_0_outcome: SCOPED

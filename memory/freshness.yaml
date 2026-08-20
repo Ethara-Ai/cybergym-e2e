@@ -59,10 +59,10 @@ hardness_catalog:
   gap: "Hardness catalog has no ANCHORED rows. A project with nothing anchored has no published reason to believe any task it authors is hard."
 
 screening:
-  difficulty_horizon: null
-  screening_horizon: null
-  maximum_re_audit_interval_days: null
-  cohort_refresh_deadline: null
+  difficulty_horizon: 180
+  screening_horizon: 180
+  maximum_re_audit_interval_days: 180
+  cohort_refresh_deadline: "2027-02-20T00:00:00Z"
 
 coverage_gaps:
   - id: GAP-E-001
@@ -82,10 +82,14 @@ coverage_gaps:
     holds_at: STALE
   - id: GAP-E-006
     subject: trust_roots
-    holds_at: STALE
+    holds_at: RESOLVED
+    resolved_at: "2026-08-20"
+    notes: "Trust root configured: harness-operator@cybergym-e2e (self-attested). E4: caps below CURRENT."
   - id: GAP-E-007
     subject: cohort_registry
-    holds_at: STALE
+    holds_at: RESOLVED
+    resolved_at: "2026-08-20"
+    notes: "Cohort pinned: claude-opus-4-8 (primary), claude-opus-4-6 (secondary). Snapshot snapshot_001.yaml."
   - id: GAP-E-008
     subject: re_audit_interval
     holds_at: STALE

@@ -110,9 +110,10 @@ phases:
     status: not_started
 
   - id: G
-    status: not_started
-    notes: "Genesis is a separate human-approved branch. AMB-E-002 must be resolved before Phase G is invoked."
+    status: not_applicable
+    resolved_at: "2026-08-20"
+    notes: "AMB-E-002 resolved as Path B (vendor only). Phase G genesis is not invoked. Project is an evaluation harness, not a knowledge repository."
 
 waiting_on:
   gate: null
-  notes: "Phase 2 complete. All Bucket-D instruments liveness-proven. Next: Phase S (scribe, requires CURRENT disposition) or Phase G (genesis, requires AMB-E-002 resolution). FORGE remains HOLD:PILOT_REQUIRED. CRUCIBLE remains HOLD."
+  notes: "Phase 2 complete. Phase G resolved as N/A (Path B). GAP-E-006 resolved (trust roots configured). GAP-E-007 resolved (cohort pinned). Evidence can now flow. Next: ingest pilot run results as CFERs, then run CRUCIBLE audit. FORGE remains HOLD:PILOT_REQUIRED. CRUCIBLE remains HOLD. Phase S requires CURRENT (blocked by E4 self-attested cap)."

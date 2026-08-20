@@ -28,10 +28,10 @@ from pathlib import Path
 _DEFAULT_PRICING = {
     "claude-fable-5":    (10.0, 50.0),
     "claude-mythos-5":   (10.0, 50.0),
-    "claude-opus-5":     (5.0, 25.0),
-    "claude-opus-4-8":   (5.0, 25.0),
-    "claude-opus-4-7":   (5.0, 25.0),
-    "claude-opus-4-6":   (5.0, 25.0),
+    "claude-opus-5":     (15.0, 75.0),
+    "claude-opus-4-8":   (15.0, 75.0),
+    "claude-opus-4-7":   (15.0, 75.0),
+    "claude-opus-4-6":   (15.0, 75.0),
     "claude-sonnet-5":   (3.0, 15.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5":  (1.0, 5.0),
@@ -42,7 +42,7 @@ _DEFAULT_PRICING = {
 _FAMILY_PRICING = (
     ("fable",  (10.0, 50.0)),
     ("mythos", (10.0, 50.0)),
-    ("opus",   (5.0, 25.0)),
+    ("opus",   (15.0, 75.0)),
     ("sonnet", (3.0, 15.0)),
     ("haiku",  (1.0, 5.0)),
 )
@@ -169,16 +169,17 @@ def _read_trajectory_metrics(run_dir):
     if not traj_dir.exists():
         return total_input, total_output, total_cache_input, total_cache_write
 
-    for f in sorted(traj_dir.glob("trajectory_attempt_*.json")):
-        try:
-            data = json.loads(f.read_text())
-            metrics = data.get("final_metrics", {})
-            total_input += metrics.get("total_prompt_tokens", 0)
-            total_output += metrics.get("total_completion_tokens", 0)
-            total_cache_input += metrics.get("total_cached_tokens", 0)
-            total_cache_write += metrics.get("total_cache_creation_tokens", 0) or 0
-        except Exception:
-            continue
+    for pattern in ["trajectory_attempt_*.json", "trajectory.json"]:
+        for f in sorted(traj_dir.glob(pattern)):
+            try:
+                data = json.loads(f.read_text())
+                metrics = data.get("final_metrics", {})
+                total_input += metrics.get("total_prompt_tokens", 0)
+                total_output += metrics.get("total_completion_tokens", 0)
+                total_cache_input += metrics.get("total_cached_tokens", 0)
+                total_cache_write += metrics.get("total_cache_creation_tokens", 0) or 0
+            except Exception:
+                continue
 
     return total_input, total_output, total_cache_input, total_cache_write
 
@@ -195,10 +196,12 @@ def _read_judge_usage(run_dir):
     if not verifier_dir.exists():
         return judge_model, judge_input, judge_output, judge_cache_input, judge_cache_write
 
-    for attempt_dir in sorted(verifier_dir.glob("attempt_*")):
-        rubric_path = attempt_dir / "rubric_score.json"
-        if not rubric_path.exists():
-            continue
+    rubric_paths = sorted(verifier_dir.glob("attempt_*/rubric_score.json"))
+    top_level = verifier_dir / "rubric_score.json"
+    if top_level.exists():
+        rubric_paths.append(top_level)
+
+    for rubric_path in rubric_paths:
         try:
             data = json.loads(rubric_path.read_text())
             usage = data.get("judge_usage", {})
