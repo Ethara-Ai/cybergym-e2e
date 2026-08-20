@@ -49,7 +49,8 @@ Output:
     └── verifier/              # Score files: reward, pytest, rubric, avg
         ├── reward.txt         # Final reward float (Harbor standard)
         ├── reward.json        # Combined scores with stage details
-        ├── pytest_score.json  # Per-stage and per-test breakdown
+        ├── ctrf.json          # Per-stage and per-test breakdown (CTRF + enriched data)
+        ├── test-stdout.txt    # Raw pytest stdout/stderr with failure reasons
         ├── rubric_score.json  # LLM rubric criteria results
         ├── avg_score.json     # Average of pytest and rubric
         └── attempt_N/         # Per-attempt score files
@@ -60,6 +61,7 @@ import atexit
 import json
 import os
 import re
+import selectors
 import shlex
 import shutil
 import subprocess
@@ -169,9 +171,12 @@ def build_image(task_dir, tag):
     return tag
 
 
-def start_container(image, name=None, env_vars=None):
-    cmd = ["docker", "run", "-d", "--rm", "--platform", PLATFORM,
-           "--add-host", "host.docker.internal:host-gateway"]
+def start_container(image, name=None, env_vars=None, network=None):
+    cmd = ["docker", "run", "-d", "--rm", "--platform", PLATFORM]
+    if network:
+        cmd.extend(["--network", network])
+    else:
+        cmd.extend(["--add-host", "host.docker.internal:host-gateway"])
     if name:
         cmd.extend(["--name", name])
     if env_vars:
@@ -219,22 +224,76 @@ def run_claude_code_agent(cid, prompt, llm_env, timeout):
         '--disallowedTools "WebFetch,WebSearch,Task,MCPSearch,NotebookEdit,Skill,AskUserQuestion" '
         '--output-format stream-json --verbose --dangerously-skip-permissions'
     ])
-    try:
-        r = subprocess.run(docker_cmd, capture_output=True, text=True,
-                           timeout=timeout, errors="replace")
-        code, stdout, stderr = r.returncode, r.stdout, r.stderr
-    except subprocess.TimeoutExpired as te:
-        print(f"  Agent timed out after {timeout}s — collecting partial output")
-        stdout = (te.stdout or b"").decode("utf-8", errors="replace") if isinstance(te.stdout, bytes) else (te.stdout or "")
-        stderr = (te.stderr or b"").decode("utf-8", errors="replace") if isinstance(te.stderr, bytes) else (te.stderr or "")
-        code = -1
 
-    if stdout:
-        print(stdout[-2000:] if len(stdout) > 2000 else stdout)
+    stdout_lines = []
+    stderr_lines = []
+    proc = subprocess.Popen(docker_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, errors="replace")
+    try:
+        sel = selectors.DefaultSelector()
+        sel.register(proc.stdout, selectors.EVENT_READ)
+        sel.register(proc.stderr, selectors.EVENT_READ)
+        deadline = time.time() + timeout
+        open_streams = 2
+        while open_streams > 0:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                proc.kill()
+                print(f"  Agent timed out after {timeout}s — collecting partial output")
+                break
+            for key, _ in sel.select(timeout=remaining):
+                line = key.fileobj.readline()
+                if not line:
+                    sel.unregister(key.fileobj)
+                    open_streams -= 1
+                    continue
+                if key.fileobj is proc.stdout:
+                    stdout_lines.append(line)
+                    try:
+                        event = json.loads(line)
+                        _print_agent_event(event)
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                else:
+                    stderr_lines.append(line)
+        sel.close()
+        remaining_out = proc.stdout.read()
+        remaining_err = proc.stderr.read()
+        if remaining_out:
+            stdout_lines.append(remaining_out)
+        if remaining_err:
+            stderr_lines.append(remaining_err)
+        proc.wait(timeout=10)
+    except Exception:
+        proc.kill()
+        proc.wait()
+
+    stdout = "".join(stdout_lines)
+    stderr = "".join(stderr_lines)
+    code = proc.returncode if proc.returncode is not None else -1
     if stderr:
         lines = stderr.strip().split("\n")
         print("\n".join(lines[-20:]))
     return code, stdout, stderr
+
+
+def _print_agent_event(event):
+    etype = event.get("type", "")
+    if etype == "assistant" and "message" in event:
+        msg = event["message"]
+        for block in msg.get("content", []):
+            if block.get("type") == "tool_use":
+                print(f"  [agent] tool: {block.get('name', '?')}")
+            elif block.get("type") == "text" and block.get("text", "").strip():
+                text = block["text"].strip()
+                if len(text) > 120:
+                    text = text[:120] + "..."
+                print(f"  [agent] {text}")
+    elif etype == "result" and "result" in event:
+        text = event["result"].strip()
+        if len(text) > 150:
+            text = text[:150] + "..."
+        print(f"  [agent] done: {text}")
 
 
 def get_llm_env(args):
@@ -483,10 +542,13 @@ def run_verifier(image, task_dir, poc_path, patch_path):
         code, stdout, stderr = exec_run(
             vcid, "bash /verifier/test.sh", "Running verifier", timeout=7200,
         )
+        verifier_output = ""
         if stdout:
             print(stdout)
+            verifier_output += stdout
         if stderr and "error" in stderr.lower():
             print(stderr[-500:])
+            verifier_output += "\n" + stderr
 
         reward = 0.0
         test_results = {}
@@ -527,7 +589,7 @@ def run_verifier(image, task_dir, poc_path, patch_path):
                     stages[stage_key] = test_results[tname]
                     break
 
-        return reward, stages, test_results, ctrf
+        return reward, stages, test_results, ctrf, verifier_output
     finally:
         cleanup(vcid)
 
@@ -632,6 +694,7 @@ Respond ONLY with the JSON array, no other text."""
     headers = {
         "content-type": "application/json",
         "anthropic-version": "2023-06-01",
+        "anthropic-beta": "prompt-caching-2024-07-31",
     }
     if auth_token:
         headers["Authorization"] = f"Bearer {auth_token}"
@@ -642,7 +705,9 @@ Respond ONLY with the JSON array, no other text."""
         "model": judge_model,
         "max_tokens": 4096,
         "temperature": 0.0,
-        "messages": [{"role": "user", "content": prompt}],
+        "messages": [{"role": "user", "content": [
+            {"type": "text", "text": prompt, "cache_control": {"type": "ephemeral"}},
+        ]}],
     }
 
     url = f"{base_url.rstrip('/')}/v1/messages"
@@ -686,11 +751,32 @@ Respond ONLY with the JSON array, no other text."""
                 "met": cr.get("met", False),
                 "score": cr.get("score", 0),
                 "max_score": orig["score"] if orig else 0,
+                "importance": orig.get("importance", "") if orig else "",
+                "type": orig.get("type", "") if orig else "",
                 "evidence": cr.get("evidence", ""),
             }
 
         rubric_score = earned / total_positive if total_positive > 0 else 0.0
         rubric_score = max(-1.0, min(1.0, rubric_score))
+
+        usage = resp.get("usage", {})
+        input_tokens = usage.get("input_tokens", 0)
+        output_tokens = usage.get("output_tokens", 0)
+        cache_creation = usage.get("cache_creation_input_tokens", 0)
+        cache_read = usage.get("cache_read_input_tokens", 0)
+
+        PRICING = {
+            "claude-opus-4-8":   {"input": 15.0, "output": 75.0, "cache_write": 18.75, "cache_read": 1.50},
+            "claude-sonnet-4-6": {"input": 3.0,  "output": 15.0, "cache_write": 3.75,  "cache_read": 0.30},
+        }
+        prices = PRICING.get(judge_model, PRICING["claude-opus-4-8"])
+        cost = (
+            (input_tokens / 1_000_000) * prices["input"]
+            + (output_tokens / 1_000_000) * prices["output"]
+            + (cache_creation / 1_000_000) * prices["cache_write"]
+            + (cache_read / 1_000_000) * prices["cache_read"]
+        )
+        usage["cost_usd"] = round(cost, 6)
 
         return {
             "rubric_score": round(rubric_score, 6),
@@ -698,7 +784,7 @@ Respond ONLY with the JSON array, no other text."""
             "total_positive": total_positive,
             "judge_model": judge_model,
             "criteria": details,
-            "judge_usage": resp.get("usage", {}),
+            "judge_usage": usage,
         }
 
     except Exception as e:
@@ -706,7 +792,7 @@ Respond ONLY with the JSON array, no other text."""
         return None
 
 
-def save_attempt_scores(run_dir, attempt, pytest_data, rubric_data, max_attempts=1):
+def save_attempt_scores(run_dir, attempt, pytest_data, rubric_data, max_attempts=1, verifier_output="", test_weights=None):
     """Save per-attempt score files immediately."""
     if max_attempts > 1:
         attempt_dir = run_dir / "verifier" / f"attempt_{attempt}"
@@ -714,23 +800,22 @@ def save_attempt_scores(run_dir, attempt, pytest_data, rubric_data, max_attempts
         attempt_dir = run_dir / "verifier"
     attempt_dir.mkdir(parents=True, exist_ok=True)
 
+    if verifier_output:
+        (attempt_dir / "test-stdout.txt").write_text(verifier_output)
+
     pytest_score = pytest_data.get("reward", 0.0)
     stages = pytest_data.get("stages", {})
     pytest_data_enriched = dict(pytest_data)
     pytest_data_enriched["stages_detail"] = {
-        s: {
-            "status": stages.get(s),
-            "description": STAGE_DESCRIPTIONS.get(s, ""),
-        }
+        s: {"status": stages.get(s)}
         for s in ["stage1", "stage2", "stage3", "stage4"]
     }
-    json.dump(pytest_data_enriched, open(attempt_dir / "pytest_score.json", "w"), indent=2)
-
-    ctrf = pytest_data.get("ctrf", {})
-    if ctrf:
-        for t in ctrf.get("results", {}).get("tests", []):
-            t.pop("message", None)
-        json.dump(ctrf, open(attempt_dir / "ctrf.json", "w"), indent=2)
+    weights = test_weights or {}
+    ctrf = pytest_data_enriched.get("ctrf", {})
+    for t in ctrf.get("results", {}).get("tests", []):
+        t.pop("message", None)
+        t["weight"] = weights.get(t["name"], 0)
+    json.dump(pytest_data_enriched, open(attempt_dir / "ctrf.json", "w"), indent=2)
 
     rubric_score = 0.0
     if rubric_data:
@@ -754,10 +839,7 @@ def save_attempt_scores(run_dir, attempt, pytest_data, rubric_data, max_attempts
         "rubric_score": round(rubric_score, 6),
         "avg_score": round(avg_score, 6),
         "stages_detail": {
-            s: {
-                "status": stages.get(s),
-                "description": STAGE_DESCRIPTIONS.get(s, ""),
-            }
+            s: {"status": stages.get(s)}
             for s in ["stage1", "stage2", "stage3", "stage4"]
         },
     }
@@ -955,6 +1037,14 @@ def main():
     img_tag = f"harbor-{task_name.lower().replace('_', '-')}:run"
     build_image(task_dir, img_tag)
 
+    test_weights_data = {}
+    test_weights_path = task_dir / "tests" / "test_weights.json"
+    if test_weights_path.exists():
+        try:
+            test_weights_data = json.load(open(test_weights_path))
+        except Exception:
+            pass
+
     scripts_dir = Path(__file__).parent / "scripts"
 
     start_time = time.time()
@@ -1067,7 +1157,7 @@ def main():
             cid = None
 
             print(f"\n  Grading (attempt {attempt}) in fresh container...")
-            reward, stages, test_results, ctrf = run_verifier(
+            reward, stages, test_results, ctrf, verifier_output = run_verifier(
                 img_tag, task_dir, poc_file, patch_file)
 
             agent_success = (stages.get("stage1") == "passed" and
@@ -1088,7 +1178,7 @@ def main():
                 traj_text = log_file.read_text(errors="replace")
             rubric_data = evaluate_rubric(task_dir, traj_text, llm_env, llm_model)
 
-            avg_score = save_attempt_scores(run_dir, attempt, pytest_data, rubric_data, args.max_attempts)
+            avg_score = save_attempt_scores(run_dir, attempt, pytest_data, rubric_data, args.max_attempts, verifier_output, test_weights_data)
 
             attempt_result = {
                 "attempt": attempt,
@@ -1163,14 +1253,6 @@ def main():
         except Exception:
             pass
 
-    # Load test weights from task
-    test_weights_data = {}
-    test_weights_path = task_dir / "tests" / "test_weights.json"
-    if test_weights_path.exists():
-        try:
-            test_weights_data = json.load(open(test_weights_path))
-        except Exception:
-            pass
 
     summary = {
         "task": task_name,
@@ -1186,10 +1268,7 @@ def main():
         "avg_score": round(final_avg, 6),
         "best_reward": best_reward,
         "stages": {
-            s: {
-                "status": best.get(s),
-                "description": STAGE_DESCRIPTIONS.get(s, ""),
-            }
+            s: {"status": best.get(s)}
             for s in ["stage1", "stage2", "stage3", "stage4"]
         },
         "agent_success": best.get("agent_success", False),

@@ -1,0 +1,34 @@
+schema_version: "1.0.0"
+predicate_type: "engram.cohort-registry/v1"
+
+statement:
+  dsse_wrapper:
+    payload_type: "application/vnd.engram.cohort-registry+yaml"
+    payload_digest: "sha256:cccc111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
+    signatures:
+      - keyid: "test-signer-001"
+        sig: "frozen-test-cohort-signature"
+
+  predicate:
+    registry_identity: "frontier-cohort-registry-test"
+    schema_version: "1.0.0"
+    sequence: 1
+    predecessor_digest: null
+    issued_at: "2026-08-01T00:00:00Z"
+    effective_at: "2026-08-01T00:00:00Z"
+    validity_interval:
+      valid_at: "2026-08-01T00:00:00Z"
+      invalid_at: "2027-02-01T00:00:00Z"
+    inclusion_policy_digest: "sha256:policydigest000000000000000000000000000000000000000000000000000000"
+    required_cohort:
+      - provider: "anthropic"
+        model: "claude-opus-4-8"
+        version: "2026-06-01"
+      - provider: "openai"
+        model: "o3"
+        version: "2026-05-15"
+    release_evidence_digests:
+      - provider: "anthropic"
+        digest: "sha256:relanthro00000000000000000000000000000000000000000000000000000000"
+      - provider: "openai"
+        digest: "sha256:relopenai00000000000000000000000000000000000000000000000000000000"

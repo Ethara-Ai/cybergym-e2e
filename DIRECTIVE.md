@@ -1,76 +1,88 @@
 # DIRECTIVE: ENGRAM
 
-**Ledger state: STALE** 🟡 Phase 0.5 gate approved; Phase 1 not yet run.
+**Ledger state: STALE** 🟡 Phase 1 complete. Projections resolved. Phase 2 pending.
 
-**Project**: CyberGym-E2E. **Date**: 2026-08-19. **Run kind**: POST-GATE-APPROVAL.
+**Project**: CyberGym-E2E. **Date**: 2026-08-20. **Run kind**: PHASE-1-COMPLETE.
 
-**CRUCIBLE disposition**: HOLD (updated 2026-08-19 after fixes applied).
+**Bound artifacts**: `memory/scope.yaml` at `57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd`, `memory/hardness.yaml` at `858228976a625ac4a73c3d5e4a3cf64d214d1aff228e185fb50101bb4a6ad16c`, `memory/capabilities.yaml` at `408c2b38d635d434455b20e57bb88d6a8752b24aa4cd5530bb5423ba18eb0bf9`.
 
-**Gate status**: Phase 0.5 scope gate **approved** 2026-08-19. `requirements/benchmark.md` drafted from paper (arXiv:2606.04460v2). `touchstones/README.md` scaffolded with published baselines. Phase 1 unblocked but not yet run. GAP-E-001 and GAP-E-002 partially resolved (directories exist, content needs human review).
+## Executive summary
 
-**Bound artifacts**: `memory/scope.yaml` at `57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd`, `memory/hardness.yaml` at `858228976a625ac4a73c3d5e4a3cf64d214d1aff228e185fb50101bb4a6ad16c`.
+Phase 1 has run. The ledger is scaffolded with zero CFERs and disposition STALE, which is the correct closed state for a project that has no signed evidence and no broken instruments. Both `FORGE_VIEW` and `CRUCIBLE_VIEW` are now resolved at evaluation instant 2026-08-20T00:00:00Z, unblocking peer instruments: FORGE may proceed to scope under its standing direction, and CRUCIBLE may proceed past its re-fired gate. The six required Bucket-D instruments (ingestor, signature verifier, freshener, checkpointer, recovery procedure, provenance gate) are scaffolded inside `memory/` but not yet liveness-proven; Phase 2 will run the conformance suite and negative/positive controls to establish that proof. `requirements/benchmark.md` and `touchstones/README.md` exist and carry content drafted from the paper (arXiv:2606.04460v2). The human must review and finalize both before they are authoritative inputs. The day-one hardness catalog is live with 341 levers across 45 categories on 3 axes and 47 archetypes, all CANDIDATE, zero ANCHORED.
 
-## Correction to the previous revision
+## Current front line
 
-An earlier revision of this report recorded a standing of HOLD and capped several gaps at BLOCK. Both used the wrong vocabulary. The States and dispositions section of `trinity/ENGRAM.md` closes the ledger set to `CURRENT`, `STALE` and `BROKEN`, and states that a value outside these sets is a contract violation rather than a novel state to argue into. SHIP, HOLD and BLOCK are CRUCIBLE's set; FORGE carries its own seven-value family. ENGRAM never emits any of them.
+No ACTIVE levers. No frontier defeats. Zero CFERs. Zero signed proofs. No trust roots configured. No cohort pinned. The ledger honestly carries no difficulty evidence of any kind. Every claim in this project is authored prose or locally computed. The signed-evidence side of the boundary is empty.
 
-The correct value is `STALE`, and the contract names this case directly: a ledger is STALE when it honestly carries zero CFERs because no signed proof has landed yet, no evidence is broken, and a missing, expired or overdue cohort registry holds it there. That is this project exactly.
+## What caps STALE
 
-It is not `BROKEN`. BROKEN requires signature failure, unverifiable proof, non-identical recompute, mutable provenance, an unmeasured or frontier-caught ACTIVE lever, or inert required machinery, where inert means present but hardcoded to reject every valid input. This project has no ACTIVE lever, no bad evidence and no inert instrument. Its required machinery is simply not built yet, and the contract is explicit that missing is a coverage gap while inert closes on all evidence and is broken. Every gap below therefore holds the ledger at STALE, and none of them breaks it.
+The ledger is STALE, not BROKEN, because no evidence is broken and no required Bucket-D instrument is inert. Missing instruments are coverage gaps; inert instruments would be BROKEN. The primary drivers holding the ledger at STALE are GAP-E-006 (no trust roots, so no evidence can reach CURRENT under E1 and E4) and GAP-E-007 (no cohort pinned, so no frontier to measure against under E2).
 
-## Where the project stands
+## Peer instrument standing
 
-ENGRAM has completed discovery and stopped where the contract tells it to stop. Phase 0 is read-only except the scope file, and item 9 forbids scaffolding or mutating the ledger before approval, so there is no `memory/ledger.yaml`, no proof store, and no computed projection yet. The two projections are what FORGE and CRUCIBLE read as standing direction, which is why both peers are currently held. FORGE sits at `HOLD:PILOT_REQUIRED`, the ceiling the contract assigns to an unresolvable `FORGE_VIEW`, and CRUCIBLE is parked at a re-fired gate of its own. Neither is a refusal. Every instrument in this project is waiting on inputs rather than reporting unsound work, and no disposition anywhere is currently BLOCK.
+| Instrument | Disposition | View status | Caps at |
+|---|---|---|---|
+| FORGE | HOLD:PILOT_REQUIRED | `FORGE_VIEW` resolved | HOLD:PILOT_REQUIRED until signed pilot |
+| CRUCIBLE | HOLD | `CRUCIBLE_VIEW` resolved | HOLD until Phase 0.5 re-approval discharged |
 
-The measurement side of this project is empty. There is no trust root, no accepted signer identity, no `cohort_registry_issuer`, and no pinned cohort. Under invariant E1 only an external signed pilot outcome over frozen task bytes counts as difficulty evidence, and under E2 an unpinned frontier is no frontier. Nothing in this project can reach `CURRENT` today, and no lever can be promoted to `ACTIVE`. That is the single largest fact about the current state, and it is a missing-input condition rather than a defect in anything already built.
+## Hardness catalog
 
-## The day-one hardness catalog is live
+⚠️ 341 levers, 45 categories, 3 axes, 47 archetypes. All rows CANDIDATE. Zero ANCHORED. Zero SUPERSEDED.
 
-Phase H built the catalog before any task exists, which is what genesis intends. `memory/hardness.yaml` holds 341 levers across 45 categories on 3 axes, plus 47 archetypes, generated from `trinity/research/HARDNESS.md` and regenerable from it. `HARDNESS.md` is emitted from that ledger and carries the do-not-hand-edit banner.
+The catalog is authored from published evidence (E23) and is design input to FORGE, never difficulty evidence. No lever can reach ACTIVE and no tier can be anchored until a signed pilot measures difficulty against a pinned cohort. Named gap: no published evidence anchors any row; the catalog gives design targets only.
 
-Every row is `CANDIDATE` and every lever state is `EXPIRED`. That is the correct closed state, not an error. Invariant E23 keeps the two ideas apart: the hardness contract is authored and published evidence and never difficulty evidence, so the catalog can be complete while remaining entirely unmeasured.
+10 archetypes (AR1 through AR10) are FORGE-selectable. The remaining 37 are catalogued but unselectable, recorded as GAP-E-012.
+
+## Bucket-D instrument status
+
+| Instrument | Bytes present | Implemented | Liveness proven |
+|---|---|---|---|
+| Ingestor | ⚠️ scaffolded | false | false |
+| Signature verifier | ⚠️ scaffolded | false | false |
+| Freshener | ⚠️ scaffolded | false | false |
+| Checkpointer | ⚠️ scaffolded | false | false |
+| Recovery procedure | ⚠️ scaffolded | false | false |
+| Provenance gate | ⚠️ scaffolded | false | false |
+
+All six are honestly `implemented: false`. E19: an honest scaffold is STALE, never BROKEN. Phase 2 will build the conformance suite and run both-halves liveness proofs.
+
+## Integrity classes
+
+**Reference fidelity (E20)**: ⚠️ No eligible families. No signed real-upstream-score has been delivered. Exempt: no emulation-bearing task exists.
+
+**Calibration (E21)**: ⚠️ No eligible families. No signed pilot has run. Exempt: no task declares a hardness tier.
+
+**Verifier robustness (E22)**: ⚠️ No eligible families. No signed robustness outcome group exists. Exempt: the existing tasks have parsed-verifier surfaces but no signed robustness evidence.
+
+**Rubric compilation (E26)**: ⚠️ Not exempt. The prior CRUCIBLE audit (VERDICT.md) recorded the rubric judge carrying 50% of final score with no reliability discipline. This is inherited as a watch item, not measured evidence.
+
+**Budget (E34)**: ⚠️ No budget declared. `requirements/` carries no budget directive. Exempt: no budget obligation.
 
 ## Coverage gaps
 
-Twelve gaps are recorded in `memory/scope.yaml`. All twelve hold the ledger at `STALE`; none breaks it. Two are the drivers that keep it from ever reaching `CURRENT` without new inputs.
+| ID | Subject | Severity | Status | Holds at |
+|---|---|---|---|---|
+| GAP-E-001 | `requirements/` | BLOCKING_INPUT | Partially resolved: `requirements/benchmark.md` exists, needs human review | STALE |
+| GAP-E-002 | `touchstones/` | BLOCKING_INPUT | Partially resolved: `touchstones/README.md` exists with published baselines | STALE |
+| GAP-E-003 | `dataset/` | HIGH | Open: dataset not materialized, regenerable via `convert_to_harbor.py` | STALE |
+| GAP-E-004 | `research/` | MEDIUM | Open: parent `research/` corpus does not exist | STALE |
+| GAP-E-005 | `playbooks/` | MEDIUM | Open: `playbooks/` does not exist | STALE |
+| GAP-E-006 | Trust roots | CRITICAL | Open: no external trust roots configured | STALE |
+| GAP-E-007 | Cohort registry | CRITICAL | Open: no cohort pinned, no registry snapshot | STALE |
+| GAP-E-008 | Re-audit interval | HIGH | Open: no registry authority named | STALE |
+| GAP-E-009 | Trinity pin | HIGH | Open: unregistered gitlink, no `.gitmodules` | STALE |
+| GAP-E-010 | Prior audit gate | HIGH | Open: prior CRUCIBLE run advanced past undischarged gate | STALE |
+| GAP-E-011 | Parent sanity | MEDIUM | Open: 54 findings from parent-sanity harness | STALE |
+| GAP-E-012 | Archetype vocabulary | HIGH | Open: 37 archetypes unselectable by FORGE | STALE |
 
-| Gap | Subject | Holds ledger at |
-|---|---|---|
-| GAP-E-001 | `requirements/` absent, human-write-only under E9 | STALE |
-| GAP-E-002 | `touchstones/` absent, human-write-only under E12 | STALE |
-| GAP-E-003 | `dataset/` not materialized, regenerable | STALE |
-| GAP-E-004 | parent `research/` absent | STALE |
-| GAP-E-005 | `playbooks/` absent | STALE |
-| GAP-E-006 | no trust root or signer identity | STALE, driver |
-| GAP-E-007 | no cohort pinned, frontier unmeasurable | STALE, driver |
-| GAP-E-008 | no re-audit interval, no registry authority | STALE |
-| GAP-E-009 | `trinity/` is an unregistered gitlink | STALE |
-| GAP-E-010 | prior audit advanced past an undischarged gate | STALE |
-| GAP-E-011 | parent sanity fails | STALE |
-| GAP-E-012 | archetype vocabulary mismatch, 47 catalogued against 10 selectable | STALE |
+## Screening standing
 
-## Two findings worth reading in full
+No screening roots are configured (GAP-E-006). E29: four mandatory screening roots must be present before any screening can run. No contamination screening has been performed.
 
-**The prior audit shipped past a gate it never discharged.** `audit/progress.yaml` recorded Phase 0.5 as `pending_approval` while Phases 1 and 2 were recorded complete and `VERDICT.md` was emitted. No `scope.approved` file existed anywhere in the tree. CRUCIBLE Phase 0.5 item 2 requires the Phase 1 scaffolder to recompute the scope digest first and to exit before writing any harness file. This is GAP-E-010, and it is why the prior findings are now carried as suspended claims rather than as evidence.
+## Cohort currency
 
-**The archetype vocabulary does not close.** The catalog defines AR1 through AR47. `trinity/FORGE.md` Hardness rule 1 binds a closed primary-archetype set of AR1 through AR10, and FORGE Phase 0 coverage requires every eligible archetype to be covered at least once with no archetype claiming more than one fifth of slots. Thirty-seven catalogued archetypes are therefore unselectable by any lawful FORGE run. ENGRAM records the gap and cannot resolve it alone, because the selection set lives in a contract ENGRAM does not own.
+No cohort registry is configured (GAP-E-007). E2: an unpinned frontier is no frontier. The `cohort:required` flag stands project-wide.
 
-## Resolved since scoping
+## Provenance
 
-The absence of `dataset/` was an open ambiguity and is now settled. `dataset.zip` preserves the entry with file mode 120755, a symlink pointing at `tasks/`, and `.gitignore` ignores `tasks/`, `data/`, `dataset/`, `jobs/` and `run_logs/`. The dataset was a build output of `convert_to_harbor.py`, whose `--out` default is `ROOT/tasks`. Its absence is a clean working tree, not data loss, so GAP-E-003 was downgraded from BLOCK to HOLD and the prior audit is to be re-run against a rebuilt tree rather than retracted.
-
-## Parent sanity
-
-`just --justfile trinity/tools/justfile parent-sanity` fails. The integrity half reports the absent ten-file doc spine, eight absent shared directories, the absent `.agents/` front door, the unregistered submodule, and the README showcase shape. Those are genesis outputs and clear when Phase G runs.
-
-The prose half reports six findings against `README.md` that reproduce as linter defects on minimal fixtures rather than defects in this project. `check_headings` counts a `#` comment inside a fenced bash block as an h1, so the later `###` headings report a false level jump. `check_linebreaks` treats consecutive badge lines beginning with `[![` as a hard-wrapped paragraph, because `is_structural` recognizes `#`, `-`, `*`, `>`, `|` and fences but not image links. Both are reported upstream against `trinity/tools/prose.py` and neither warrants editing this project's README. The two genuine findings, hard-wrapped paragraphs in `templates/instruction.e2e.md`, are fixed.
-
-## What unblocks this
-
-A human authors `requirements/` and `touchstones/`, then discharges the scope gate. Phase 1 then builds the ledger and computes `memory/forge_view.yaml` and `memory/crucible_view.yaml`, which releases both peers. Pinning a cohort registry with an authorized issuer is what lifts the two BLOCK-level gaps and makes any difficulty claim possible at all.
-
-```bash
-echo '57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd' > memory/approval
-```
-
-*Instrument: ENGRAM | Harness: `memory/` | Contract: `trinity/ENGRAM.md`*
+Approved scope digest: `57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd`. Ledger digest: `d94b6802b167ff2aea3b0c7d22ca5f7f436c6a779351b4d6db026c7d50f71782`. Git SHA: `c743ff475c3cbdca04caf6c45ee3a1e5a618056c`. Clean bit: false (dirty: `trinity`).

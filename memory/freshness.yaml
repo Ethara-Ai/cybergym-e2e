@@ -1,0 +1,103 @@
+# ENGRAM freshness state. Phase 2 step 8.
+# State vector, proof verification result, frontier-caught flags, bucket_d_status liveness summary, disposition, and named coverage gaps.
+
+schema_version: "1.0.0"
+
+evaluated_at: "2026-08-20T00:00:00Z"
+
+state_vector:
+  active_levers: 0
+  watch_levers: 0
+  expired_levers: 0
+  retired_levers: 0
+  cfer_count: 0
+  frontier_caught_active: 0
+  unmeasured_active: 0
+
+proof_verification:
+  proofs_verified: 0
+  proofs_failed: 0
+  proofs_quarantined: 0
+
+frontier_caught_flags: []
+
+bucket_d_status:
+  ingestor:
+    bytes_present: false
+    implemented: false
+    liveness_proven: false
+  signature_verifier:
+    bytes_present: false
+    implemented: false
+    liveness_proven: false
+  freshener:
+    bytes_present: false
+    implemented: false
+    liveness_proven: false
+  checkpointer:
+    bytes_present: false
+    implemented: false
+    liveness_proven: false
+  recovery_procedure:
+    bytes_present: false
+    implemented: false
+    liveness_proven: false
+  provenance_gate:
+    bytes_present: false
+    implemented: false
+    liveness_proven: false
+
+disposition: STALE
+disposition_basis: "Zero CFERs. No signed proof has landed. No evidence is broken. Every required Bucket-D instrument is honestly unimplemented (implemented: false). E19: an honestly unimplemented zero-CFER scaffold is STALE, never BROKEN. No instrument claims implemented status, so no instrument is inert and no row is theater."
+not_broken_because: "BROKEN requires signature failure, unverifiable proof, non-identical recompute, mutable provenance, unmeasured or frontier-caught ACTIVE, or inert required Bucket-D machinery. Inert means present but hardcoded to reject every valid input. This project has no ACTIVE lever, no bad evidence, and no inert instrument."
+
+hardness_catalog:
+  rows_candidate: 341
+  rows_anchored: 0
+  rows_superseded: 0
+  pass_flag: false
+  gap: "Hardness catalog has no ANCHORED rows. A project with nothing anchored has no published reason to believe any task it authors is hard."
+
+screening:
+  difficulty_horizon: null
+  screening_horizon: null
+  maximum_re_audit_interval_days: null
+  cohort_refresh_deadline: null
+
+coverage_gaps:
+  - id: GAP-E-001
+    subject: requirements/
+    holds_at: STALE
+  - id: GAP-E-002
+    subject: touchstones/
+    holds_at: STALE
+  - id: GAP-E-003
+    subject: dataset/
+    holds_at: STALE
+  - id: GAP-E-004
+    subject: research/
+    holds_at: STALE
+  - id: GAP-E-005
+    subject: playbooks/
+    holds_at: STALE
+  - id: GAP-E-006
+    subject: trust_roots
+    holds_at: STALE
+  - id: GAP-E-007
+    subject: cohort_registry
+    holds_at: STALE
+  - id: GAP-E-008
+    subject: re_audit_interval
+    holds_at: STALE
+  - id: GAP-E-009
+    subject: trinity_pin
+    holds_at: STALE
+  - id: GAP-E-010
+    subject: prior_audit_gate
+    holds_at: STALE
+  - id: GAP-E-011
+    subject: parent_sanity
+    holds_at: STALE
+  - id: GAP-E-012
+    subject: archetype_vocabulary
+    holds_at: STALE

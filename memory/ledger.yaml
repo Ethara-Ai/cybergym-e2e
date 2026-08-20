@@ -1,13 +1,15 @@
 # ENGRAM append-only CFER ledger. Phase 1 step 5.
 # No signed pilot proofs exist. No CFERs have been birthed.
 # E3: measured CFERs are never deleted or overwritten.
+# Phase 0.5 approved 2026-08-19. Phase 1 run 2026-08-20.
 
 schema_version: "1.0.0"
 
 ledger:
   created_at: "2026-08-19T00:00:00Z"
+  phase_1_run_at: "2026-08-20T00:00:00Z"
   disposition: STALE
-  disposition_basis: "Zero CFERs. No signed proof has landed. No evidence is broken. Every required Bucket-D instrument is not yet built (honestly unimplemented). E19: honest scaffold is STALE, never BROKEN."
+  disposition_basis: "Zero CFERs. Phase 0.5 gate approved and Phase 1 has run. No signed proof has landed. No evidence is broken. Every required Bucket-D instrument is honestly unimplemented. E19: honest scaffold is STALE, never BROKEN. A zero-CFER ledger is STALE only when the deterministic lane is live and simply unfed; the lane is not yet built, but no instrument claims implemented status, so no instrument is inert."
   cfer_count: 0
   active_lever_count: 0
   watch_lever_count: 0
@@ -17,9 +19,12 @@ ledger:
 records: []
 
 provenance:
-  approved_scope_digest: null
+  approved_scope_digest: 57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd
   ledger_digest: null
   seed_digest: null
+  requirements_digest: null
+  touchstone_digest: null
+  dataset_digest: null
   git_sha: c743ff475c3cbdca04caf6c45ee3a1e5a618056c
   clean_bit: false
-  notes: "Phase 0.5 gate not yet discharged. Ledger scaffolded empty pending approval."
+  notes: "Phase 0.5 gate discharged. Scope approved. No proofs exist in memory/proofs/. No trust roots configured in memory/roots.yaml. Ledger is honestly empty and STALE."

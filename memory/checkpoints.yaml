@@ -1,0 +1,9 @@
+# ENGRAM signed Merkle checkpoint log over the ledger. Phase 1 step 8a.
+# Each tree head carries prior root, new root, leaf count, ingest timestamp, and a detached signature from an external trust root in memory/roots.yaml.
+# A tree head whose signature does not verify, whose prior root does not chain to the last accepted head, or whose recomputed root does not match the recorded root caps the ledger at BROKEN.
+
+schema_version: "1.0.0"
+
+tree_heads: []
+
+notes: "No envelopes have been accepted. No Merkle tree exists. The first accepted envelope will create the first tree head."

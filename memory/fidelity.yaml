@@ -1,0 +1,18 @@
+# ENGRAM append-only reference-fidelity, calibration, robustness, and rubric memory. Phase 1 steps 8c-8f.
+# Keyed by task_hash. Records only signed fields from CFER attestation envelopes.
+# E20: reference fidelity is remembered, never measured by ENGRAM.
+# E21: calibration is remembered, never measured by ENGRAM.
+# E22: verifier robustness is remembered, never measured by ENGRAM.
+# E26: rubric compilation is remembered, never measured by ENGRAM.
+
+schema_version: "1.0.0"
+
+reference_fidelity: {}
+
+calibration: {}
+
+verifier_robustness: {}
+
+rubric_compilation: {}
+
+notes: "No signed CFER envelopes have been ingested. All integrity classes are empty. Each class carries its exempt-task rule under its governing invariant."

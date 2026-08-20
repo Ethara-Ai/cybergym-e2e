@@ -6,6 +6,7 @@ run:
   instrument: ENGRAM
   kind: INIT
   invoked_at: "2026-08-18T00:00:00Z"
+  phase_1_run_at: "2026-08-20T00:00:00Z"
 
 phases:
   - id: R
@@ -30,27 +31,69 @@ phases:
   - id: "0.5"
     status: approved
     approved_at: "2026-08-19"
-    notes: "Scope gate approved. Digest written to memory/approval. requirements/benchmark.md drafted from paper (arXiv:2606.04460v2), touchstones/README.md scaffolded with published baselines from Tables 3-4. Both are human-write-only; human must review and finalize."
+    notes: "Scope gate approved. Digest written to memory/approval. requirements/benchmark.md drafted from paper (arXiv:2606.04460v2). touchstones/README.md scaffolded with published baselines from Tables 3-4. Both are human-write-only; human must review and finalize."
     digest: 57d4a581017bb38bc01c397bc6a39c72d146a2630f0abe9feb384263658c93fd
 
   - id: "1"
-    status: unblocked
-    notes: "Phase 0.5 gate approved. Phase 1 can now build the ledger and compute FORGE_VIEW and CRUCIBLE_VIEW projections. Not yet started."
+    status: complete
+    completed_at: "2026-08-20"
+    notes: "Phase 1 complete. Ledger scaffolded with zero CFERs, disposition STALE. Both projections resolved: FORGE_VIEW and CRUCIBLE_VIEW are now consumable by peer instruments. Six Bucket-D instruments built inside memory/ as Python modules (ingestor, verifier, freshener, checkpointer, provenance, reporter). Conformance suite with 15 tests (7 positive, 5 negative, 3 structural) and frozen fixtures written. Registry files created: seed.yaml, sequence.yaml, supersessions.yaml, checkpoints.yaml, canary.yaml, fidelity.yaml, budget.yaml, freshness.yaml, retirements.yaml. Front doors verified present. TODO.md generated from capabilities.yaml."
+    artifacts:
+      - memory/ledger.yaml
+      - memory/seed.yaml
+      - memory/sequence.yaml
+      - memory/supersessions.yaml
+      - memory/checkpoints.yaml
+      - memory/canary.yaml
+      - memory/fidelity.yaml
+      - memory/budget.yaml
+      - memory/freshness.yaml
+      - memory/retirements.yaml
+      - memory/forge_view.yaml
+      - memory/crucible_view.yaml
+      - memory/TODO.md
+      - memory/pyproject.toml
+      - memory/ingestor.py
+      - memory/verifier.py
+      - memory/freshener.py
+      - memory/checkpointer.py
+      - memory/provenance.py
+      - memory/reporter.py
+      - memory/conformance.py
+      - DIRECTIVE.md
+    artifact_digests:
+      memory/ledger.yaml: d94b6802b167ff2aea3b0c7d22ca5f7f436c6a779351b4d6db026c7d50f71782
+      memory/seed.yaml: f20fc8883774d1b9270491d9c70215d4c7a9d93fad4d0d7dbac7d4a261051f0b
+      memory/forge_view.yaml: 8aab422244df3d238d1848ca376c9702f4dd871865d773d192a6c78ec0d831d6
+      memory/crucible_view.yaml: 28d9ebe1d54b1747d68e26055380d8ebc9a347cbe48448974aec46142b7671a9
+      memory/freshness.yaml: 808143c6854861dda8c80bf736423289255f5895724217d278b16f146a92c8ee
+      DIRECTIVE.md: 1e83703ff8b9af5f33484d13111c88747c84cebc33f3d8ff352f9f07a0aaf44f
+    projection_status:
+      forge_view: resolved
+      crucible_view: resolved
+    ledger_disposition: STALE
+    bucket_d_instruments_built: 6
+    bucket_d_instruments_liveness_proven: 0
+    conformance_tests_written: 15
 
   - id: "2"
     status: not_started
+    notes: "Phase 2 runs the conformance suite, negative controls, and positive liveness controls. Bucket-D instruments are built but not yet proven. Phase 2 will establish liveness."
+
   - id: H
     status: complete_day_one
     notes: "Day-one hardness catalog built before any task exists, as genesis intends. 341 levers, 45 categories, 3 axes, 47 archetypes, generated from trinity/research/HARDNESS.md. All rows CANDIDATE, all lever states EXPIRED, zero ACTIVE: correct closed state under E1 and E2 with no CFER and no pinned cohort. Reconciliation against measured evidence remains pending the gate."
     artifacts:
       - memory/hardness.yaml
       - HARDNESS.md
+
   - id: S
     status: not_started
+
   - id: G
     status: not_started
     notes: "Genesis is a separate human-approved branch. AMB-E-002 must be resolved before Phase G is invoked."
 
 waiting_on:
-  gate: "1"
-  notes: "Phase 1 is unblocked. Waiting for ENGRAM Phase 1 invocation to build ledger and projections."
+  gate: null
+  notes: "Phase 1 complete. Phase 2 is next: run the conformance suite to prove liveness. No gate blocks Phase 2."

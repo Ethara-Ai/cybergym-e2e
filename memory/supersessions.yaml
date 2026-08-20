@@ -1,0 +1,9 @@
+# ENGRAM append-only supersession relation. Phase 1 step 8a.
+# Schema is CLOSED. Fields: cfer_id, superseding_cfer_id, invalid_at, envelope_digest.
+# Exactly one relation row exists per superseded CFER.
+# The signed Merkle checkpoint log covers the relation.
+# Replay recovers each row from the signed superseding envelope.
+
+schema_version: "1.0.0"
+
+supersessions: []
