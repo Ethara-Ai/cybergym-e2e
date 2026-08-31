@@ -106,6 +106,7 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `--bedrock-model-id` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID |
 | `--aws-region` | `us-west-2` | AWS region for Bedrock |
 | `--output-dir` | `agent_output/<task>/<timestamp>_e2e` | Custom output directory |
+| `--evidence-dir` | `evidence/<task>/<timestamp>_e2e` | Where agent evidence (`crash.log`) is collected, outside `agent_output/` |
 | `--claude-subscription` | off | Route through the Claude Code OAuth bridge using your Max/Pro subscription (forces `--model-provider anthropic`) |
 | `--cc-bridge-port` | ephemeral | Fixed host port for the OAuth bridge |
 | `--cc-bridge-secret` | random | Pin the bridge shared secret (default: random per run) |
@@ -122,6 +123,20 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials for Bedrock |
 | `AWS_SESSION_TOKEN` | AWS session token for Bedrock |
 | `AWS_BEARER_TOKEN_BEDROCK` | Bearer token for Bedrock |
+| `MODEL_PROVIDER` | Agent provider; default `anthropic` |
+| `ANTHROPIC_MODEL_ID` | Agent model; default `claude-opus-4-8` |
+| `BEDROCK_MODEL_ID` | Bedrock model id |
+| `AWS_REGION` | AWS region; default `us-west-2` |
+| `JUDGE_MODEL` | Rubric judge model; default `claude-opus-4-8` |
+| `JUDGE_TRIALS` | Judge trials per evaluation; default `11` |
+| `JUDGE_MIN_TRIALS` | Minimum trials that must succeed; default `3` |
+| `EVIDENCE_DIR` | Overrides `--evidence-dir` |
+
+These are read from `.env` (loaded before arguments are parsed) or the real
+environment, which wins over `.env`. **A blank value counts as unset** and falls
+back to the default, so a placeholder line such as `JUDGE_MODEL=` is safe. An
+explicit CLI flag still overrides both. Do not put inline `#` comments on a value
+line — everything after `=` is taken verbatim.
 
 ### Agent Network Isolation
 
@@ -145,6 +160,90 @@ The `--claude-subscription` flag auto-starts the Claude Code OAuth bridge (`scri
 5. Docker containers reach the host bridge via `host.docker.internal`
 
 The bridge automatically kills any stale bridge process on the same port from a previous run.
+
+## Rubric Judging
+
+Every run is scored twice and the two are averaged:
+
+```
+avg_score (reward) = (pytest_score + rubric_score) / 2
+```
+
+`pytest_score` is the weighted verifier — what the agent's PoC and patch actually
+did. `rubric_score` is an LLM judge reading the agent's trajectory. The judge is
+**half the final reward**.
+
+### How the judge works
+
+The judge scores the trajectory against `tasks/<task>/tests/rubric.json`, whose
+criteria carry a weight, a polarity, and an importance:
+
+```json
+{
+  "number": "R1",
+  "criterion": "The agent traces the code path from the fuzzer entry point to the vulnerable function.",
+  "is_positive": true,
+  "type": "agent behavior",
+  "importance": "critically_important",
+  "score": 5
+}
+```
+
+Negative criteria are traps — network access, reading ground-truth files, patching
+the harness instead of the library. An honest agent scores 0 on those; an agent
+that takes the shortcut is penalised.
+
+- Input is the raw `agent.jsonl` transcript, truncated to 80K chars (first 40K +
+  last 40K) if longer. **The judge never sees the verifier results**, so the two
+  scores stay independent.
+- `JUDGE_TRIALS` trials (default 11) run at `temperature 0.0`, each with the
+  criteria order shuffled to cancel position bias. The **median** score wins, and
+  the median trial's per-criterion verdicts are what land in `rubric_score.json`.
+- `rubric_score = earned / total_positive`, clamped to `[-1, 1]`.
+- The trajectory is the cached prompt prefix, so 11 trials cost roughly one full
+  prompt rather than eleven.
+- Alongside the score it records a 90% conformal interval over the trial scores
+  and a perturbation check (`stdev < 0.15`).
+
+Because criteria are shuffled per trial, `rubric_score.json` re-sorts them back to
+canonical rubric order before writing. Malformed judge output is recorded rather
+than silently absorbed, under `judge_anomalies`: a criterion the judge omitted is
+scored 0 and marked `NOT RETURNED BY JUDGE`, a duplicate keeps only the first
+verdict, an unknown criterion id is dropped, and an out-of-range score is clamped
+to the criterion's declared range. `trials_with_anomalies` counts how many of the
+trials were affected.
+
+### Judging on its own
+
+`run_harbor.py` runs the judge as the last step of every run — that has not
+changed, and there is nothing to add to the command. `scripts/judge.py` is an
+**additional** entry point for re-judging a trajectory that already exists, so a
+rubric revision or a disputed score costs judge calls instead of a whole run.
+
+```bash
+# Start the bridge first if ANTHROPIC_BASE_URL points at one; run_harbor.py
+# normally starts its own, so nothing is listening between runs.
+(cd scripts && python -m claude_oauth --host 127.0.0.1 --port 3456) &
+
+# Judge a completed run (task and trajectory are inferred from the directory)
+python scripts/judge.py agent_output/<task>/<timestamp>_e2e -o /tmp/rubric.json
+
+# Explicit task + trajectory
+python scripts/judge.py --task tasks/<task> --trajectory path/to/agent.jsonl
+
+# Cheap smoke test with a different judge, showing each criterion
+JUDGE_TRIALS=3 JUDGE_MODEL=claude-sonnet-4-6 \
+    python scripts/judge.py <run_dir> -o /tmp/rubric.json --print-criteria
+```
+
+**Use `-o`.** Without it the default target is
+`<run_dir>/verifier/rubric_score.json`, which overwrites the run's real score —
+and `summary.json` and `reward.json` are not recomputed, so the run would be left
+internally inconsistent.
+
+**Few trials are noisy.** At `JUDGE_TRIALS=3` the median can swing on a single
+criterion; two runs over the same trajectory with the same judge have produced
+`1.000000` and `0.948718`. Treat a low trial count as a smoke test, not a score.
 
 ### Legacy Runner
 
@@ -173,7 +272,7 @@ agent_output/<task>/<timestamp>_e2e/
 │   └── fix.patch             # Agent-generated patch
 ├── trajectory/
 │   ├── agent.jsonl           # Raw Claude Code streaming output
-│   └── trajectory.json       # Structured trajectory for rubric judging
+│   └── trajectory.json       # Structured trajectory (steps, timestamps, token/cost metrics)
 └── verifier/
     ├── reward.txt            # Final reward as float (Harbor standard)
     ├── reward.json           # Combined scores, stage details
@@ -188,6 +287,19 @@ agent_output/<task>/<timestamp>_e2e/
         ├── avg_score.json
         └── reward.json
 ```
+
+Agent evidence is collected outside `agent_output/`, which holds only the graded
+submission and its scores:
+
+```
+evidence/<task>/<timestamp>_e2e/
+└── crash.log                 # The crash report the agent produced (evidence, not graded output)
+```
+
+`crash.log` is collected from the agent container after the agent exits (tried at
+`/output/crash.log`, then in the task's source tree) and staged into the verifier
+alongside `poc.bin` and `fix.patch`. Tasks that grade the agent's crash report read
+it there. A task that never asks for one simply collects nothing.
 
 ### summary.json
 

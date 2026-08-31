@@ -83,6 +83,26 @@ except ImportError:
 DEFAULT_TIMEOUT = 5400
 PLATFORM = os.environ.get("PLATFORM", "linux/amd64")
 
+# USD per 1M tokens.  Used for the judge's cost line and, when a run is killed
+# before the CLI emits its `result` event, to estimate agent cost from tokens.
+MODEL_PRICING = {
+    "claude-opus-4-8":   {"input": 15.0, "output": 75.0, "cache_write": 18.75, "cache_read": 1.50},
+    "claude-sonnet-4-6": {"input": 3.0,  "output": 15.0, "cache_write": 3.75,  "cache_read": 0.30},
+}
+DEFAULT_PRICING_MODEL = "claude-opus-4-8"
+
+
+def estimate_cost_usd(model_name, input_tokens, output_tokens,
+                      cache_creation_tokens, cache_read_tokens):
+    """Estimate USD cost from token counts using MODEL_PRICING."""
+    prices = MODEL_PRICING.get(model_name) or MODEL_PRICING[DEFAULT_PRICING_MODEL]
+    return (
+        (input_tokens / 1_000_000) * prices["input"]
+        + (output_tokens / 1_000_000) * prices["output"]
+        + (cache_creation_tokens / 1_000_000) * prices["cache_write"]
+        + (cache_read_tokens / 1_000_000) * prices["cache_read"]
+    )
+
 STAGE_DESCRIPTIONS = {
     "stage1": "PoC crashes without patch",
     "stage2": "PoC OK with patch",
@@ -135,6 +155,70 @@ def is_report_based_task(task_dir):
         return "_load_report" in content or "REPORT_JSON" in content
     except Exception:
         return False
+
+
+def env_default(name, default):
+    """Value of env var `name`, or `default` when it is unset OR blank.
+
+    .env files routinely carry placeholder keys with empty values (`JUDGE_MODEL=`),
+    and treating those as an override would silently misconfigure the judge, so a
+    blank is the same as absent here.
+    """
+    value = os.environ.get(name)
+    if value is None or not value.strip():
+        return default
+    return value.strip()
+
+
+def env_default_int(name, default):
+    """Integer form of env_default; a non-numeric value falls back with a warning."""
+    raw = env_default(name, None)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"  Warning: {name}={raw!r} is not an integer; using {default}")
+        return default
+
+
+DEFAULT_AGENT_MODEL = "claude-opus-4-8"
+DEFAULT_MODEL_PROVIDER = "anthropic"
+DEFAULT_BEDROCK_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+DEFAULT_AWS_REGION = "us-west-2"
+DEFAULT_JUDGE_MODEL = "claude-opus-4-8"
+DEFAULT_JUDGE_TRIALS = 11
+DEFAULT_JUDGE_MIN_TRIALS = 3
+
+
+def task_repo_dir(task_dir):
+    """In-container source tree that tests/test_output.py reads agent artifacts
+    from, or None when the task reads them from /output.
+
+    Most tasks resolve poc.bin / fix.patch against /output, which is where the
+    verifier already stages them.  A few instead resolve them against
+    REPO_DIR = <SRC>/<project>; unless the submission is staged there too,
+    every assertion in those tasks that opens an artifact directly fails no
+    matter what the agent produced.  Returning None for the common case keeps
+    this staging off every task that does not need it.
+    """
+    test_output = task_dir / "tests" / "test_output.py"
+    if not test_output.exists():
+        return None
+    try:
+        content = test_output.read_text(errors="replace")
+    except OSError:
+        return None
+    m = re.search(r'^REPO_DIR\s*=\s*os\.path\.join\(\s*SRC_ROOT\s*,\s*["\']([^"\']+)["\']\s*\)',
+                  content, re.MULTILINE)
+    if not m:
+        return None
+    src_root = "/src"
+    m2 = re.search(r'^SRC_ROOT\s*=\s*os\.environ\.get\(\s*["\']SRC["\']\s*,\s*["\']([^"\']+)["\']\s*\)',
+                   content, re.MULTILINE)
+    if m2:
+        src_root = m2.group(1)
+    return f"{src_root.rstrip('/')}/{m.group(1)}"
 
 
 def exec_run(cid, cmd, desc=None, timeout=1200, env=None, verbose=True):
@@ -264,6 +348,22 @@ ip6tables -A OUTPUT -j REJECT 2>/dev/null || true
         print(f"  Network lockdown skipped (iptables unavailable): {stderr[-200:]}")
 
 
+def _kill_agent_processes(cid):
+    """Kill all processes owned by the 'agent' user inside the container.
+
+    proc.kill() only kills the host-side `docker exec` wrapper; the in-container
+    claude process (and its children) keep running as orphans under PID 1,
+    burning API credits. This sends SIGKILL to every agent-owned process,
+    leaving the container alive (PID 1 = sleep infinity) for the verifier."""
+    try:
+        subprocess.run(
+            ["docker", "exec", cid, "pkill", "-9", "-u", "agent"],
+            capture_output=True, timeout=10,
+        )
+    except Exception:
+        pass
+
+
 def run_claude_code_agent(cid, prompt, llm_env, timeout):
     exec_run(cid, f"cat > /src/.prompt.txt << 'PROMPT_EOF'\n{prompt}\nPROMPT_EOF",
              verbose=False)
@@ -296,6 +396,7 @@ def run_claude_code_agent(cid, prompt, llm_env, timeout):
             remaining = deadline - time.time()
             if remaining <= 0:
                 proc.kill()
+                _kill_agent_processes(cid)
                 print(f"  Agent timed out after {timeout}s — collecting partial output")
                 break
             for key, _ in sel.select(timeout=remaining):
@@ -323,6 +424,7 @@ def run_claude_code_agent(cid, prompt, llm_env, timeout):
         proc.wait(timeout=10)
     except Exception:
         proc.kill()
+        _kill_agent_processes(cid)
         proc.wait()
 
     stdout = "".join(stdout_lines)
@@ -416,6 +518,28 @@ def convert_jsonl_to_trajectory(log_path, output_path):
 
         session_id = None
         model_name = None
+        result_events = []
+        counted_message_ids = set()
+        # Claude Code stamps `timestamp` only on user events (the tool results
+        # coming back); assistant events carry none, so reading it straight off
+        # the event leaves every step blank.  Carry the nearest known stamp
+        # forward, then back-fill the leading steps that precede the first tool
+        # result, so each step is placed in time to within one turn.
+        timestamps = [(ev.get("timestamp") or "") for ev in events]
+        carried = ""
+        for i, value in enumerate(timestamps):
+            if value:
+                carried = value
+            else:
+                timestamps[i] = carried
+        carried = ""
+        for i in range(len(timestamps) - 1, -1, -1):
+            if timestamps[i]:
+                carried = timestamps[i]
+            else:
+                timestamps[i] = carried
+
+        session_count = 0
         steps = []
         step_id = 0
         total_prompt = 0
@@ -424,13 +548,22 @@ def convert_jsonl_to_trajectory(log_path, output_path):
         total_cache_creation = 0
         pending_observations = []
 
-        for ev in events:
+        for ev_index, ev in enumerate(events):
             ev_type = ev.get("type", "")
             subtype = ev.get("subtype", "")
+            ev_timestamp = timestamps[ev_index]
 
             if ev_type == "system" and subtype == "init":
-                session_id = ev.get("session_id")
-                model_name = ev.get("model")
+                # A log may concatenate several CLI sessions (retries); keep the
+                # first session id so the trajectory stays identifiable.
+                if session_id is None:
+                    session_id = ev.get("session_id")
+                model_name = ev.get("model") or model_name
+                session_count += 1
+                continue
+
+            if ev_type == "result":
+                result_events.append(ev)
                 continue
 
             if ev_type == "user":
@@ -459,7 +592,7 @@ def convert_jsonl_to_trajectory(log_path, output_path):
                     step_id += 1
                     steps.append({
                         "step_id": step_id,
-                        "timestamp": ev.get("timestamp", ""),
+                        "timestamp": ev_timestamp,
                         "source": "user",
                         "message": "\n".join(text_parts),
                     })
@@ -496,15 +629,24 @@ def convert_jsonl_to_trajectory(log_path, output_path):
                 completion_tokens = usage.get("output_tokens", 0) or 0
                 cached_tokens = usage.get("cache_read_input_tokens", 0) or 0
                 cache_creation_tokens = usage.get("cache_creation_input_tokens", 0) or 0
-                total_prompt += prompt_tokens
-                total_completion += completion_tokens
-                total_cached += cached_tokens
-                total_cache_creation += cache_creation_tokens
+
+                # Claude Code emits one assistant event per content block, all
+                # sharing the same message id and the same usage object.  Count
+                # each message's usage once, or totals are multiplied by the
+                # number of blocks in the message.
+                msg_id = msg.get("id")
+                if msg_id is None or msg_id not in counted_message_ids:
+                    if msg_id is not None:
+                        counted_message_ids.add(msg_id)
+                    total_prompt += prompt_tokens
+                    total_completion += completion_tokens
+                    total_cached += cached_tokens
+                    total_cache_creation += cache_creation_tokens
 
                 step_id += 1
                 step = {
                     "step_id": step_id,
-                    "timestamp": ev.get("timestamp", ""),
+                    "timestamp": ev_timestamp,
                     "source": "agent",
                     "model_name": model_name or "",
                     "message": "\n".join(text_parts),
@@ -527,6 +669,49 @@ def convert_jsonl_to_trajectory(log_path, output_path):
         if not steps:
             return
 
+        # The terminal `result` event carries the CLI's own authoritative
+        # per-session usage and cost; prefer it over the per-step sums, which
+        # are streaming snapshots (output_tokens is a partial count).
+        final_metrics = {
+            "total_prompt_tokens": total_prompt,
+            "total_completion_tokens": total_completion,
+            "total_cached_tokens": total_cached,
+            "total_cache_creation_tokens": total_cache_creation,
+            "total_cost_usd": 0.0,
+            "total_steps": len(steps),
+        }
+        if result_events:
+            def _sum(key):
+                return sum(int((ev.get("usage") or {}).get(key, 0) or 0) for ev in result_events)
+
+            final_metrics["total_prompt_tokens"] = _sum("input_tokens")
+            final_metrics["total_completion_tokens"] = _sum("output_tokens")
+            final_metrics["total_cached_tokens"] = _sum("cache_read_input_tokens")
+            final_metrics["total_cache_creation_tokens"] = _sum("cache_creation_input_tokens")
+            final_metrics["total_cost_usd"] = round(
+                sum(float(ev.get("total_cost_usd", 0.0) or 0.0) for ev in result_events), 6)
+            final_metrics["num_turns"] = sum(int(ev.get("num_turns", 0) or 0) for ev in result_events)
+            final_metrics["duration_ms"] = sum(int(ev.get("duration_ms", 0) or 0) for ev in result_events)
+            final_metrics["cost_source"] = "cli_result_event"
+        else:
+            # The run was killed (timeout / crash) before the CLI could emit a
+            # `result` event, so fall back to the per-step sums and price them
+            # from MODEL_PRICING.  Streamed `output_tokens` are partial
+            # snapshots, so completion tokens - and therefore the cost - are a
+            # floor, not an exact figure.
+            final_metrics["total_cost_usd"] = round(estimate_cost_usd(
+                model_name, total_prompt, total_completion,
+                total_cache_creation, total_cached), 6)
+            final_metrics["cost_source"] = "estimated_from_steps"
+            final_metrics["cost_estimate_note"] = (
+                "No CLI result event (run terminated early); tokens summed from "
+                "streamed steps and priced from MODEL_PRICING. Completion tokens "
+                "are a lower bound."
+            )
+
+        final_metrics["result_events"] = len(result_events)
+        final_metrics["sessions"] = session_count
+
         trajectory = {
             "schema_version": "ATIF-v1.7",
             "session_id": session_id or "",
@@ -536,14 +721,7 @@ def convert_jsonl_to_trajectory(log_path, output_path):
                 "model_name": model_name or "",
             },
             "steps": steps,
-            "final_metrics": {
-                "total_prompt_tokens": total_prompt,
-                "total_completion_tokens": total_completion,
-                "total_cached_tokens": total_cached,
-                "total_cache_creation_tokens": total_cache_creation,
-                "total_cost_usd": 0.0,
-                "total_steps": len(steps),
-            },
+            "final_metrics": final_metrics,
         }
 
         with open(output_path, "w", encoding="utf-8") as f:
@@ -554,7 +732,8 @@ def convert_jsonl_to_trajectory(log_path, output_path):
         print(f"  Warning: trajectory.json conversion failed: {e}")
 
 
-def run_verifier(image, task_dir, poc_path, patch_path):
+def run_verifier(image, task_dir, poc_path, patch_path, crash_path=None,
+                 repo_dir=None):
     """Run verifier in a FRESH container (separate from the agent).
 
     Starts a clean container from the same base image, copies only the
@@ -575,6 +754,13 @@ def run_verifier(image, task_dir, poc_path, patch_path):
             copy_to(vcid, poc_path, "/output/poc.bin")
         if patch_path.exists():
             copy_to(vcid, patch_path, "/output/fix.patch")
+
+        # Tasks that grade the agent's crash report need it alongside the
+        # submission.  It cannot be staged into the source tree: prepare.sh
+        # does `rm -rf` on that directory before every stage, so anything put
+        # there is gone by the time the tests run.
+        if crash_path and crash_path.exists():
+            copy_to(vcid, crash_path, "/output/crash.log")
 
         subprocess.run(["docker", "cp", str(task_dir / "tests") + "/.",
                         f"{vcid}:/verifier/"], capture_output=True, text=True)
@@ -757,8 +943,10 @@ For each criterion, respond with a JSON array. Each element must have:
 Respond ONLY with the JSON array, no other text."""
 
     body = {
+        # Headroom matters: a truncated JSON array loses its closing bracket,
+        # fails the regex match, and throws away the whole trial.
         "model": judge_model,
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "temperature": 0.0,
         "messages": [{"role": "user", "content": [
             {"type": "text", "text": prompt_prefix, "cache_control": {"type": "ephemeral"}},
@@ -788,23 +976,84 @@ Respond ONLY with the JSON array, no other text."""
             return None
 
         criteria_results = json.loads(match.group())
+        if not isinstance(criteria_results, list):
+            print(f"  Trial {trial_idx}: response was not a JSON array")
+            return None
+
+        by_number = {r["number"]: r for r in rubric}
         total_positive = sum(r["score"] for r in rubric if r["is_positive"])
         earned = 0.0
         details = {}
+        anomalies = {"unknown": [], "duplicate": [], "clamped": [], "missing": []}
+
         for cr in criteria_results:
-            num = cr["number"]
-            orig = next((r for r in rubric if r["number"] == num), None)
-            if orig:
-                earned += cr.get("score", 0)
+            if not isinstance(cr, dict):
+                continue
+            num = cr.get("number")
+            orig = by_number.get(num)
+            if orig is None:
+                # Judge invented a criterion ID that is not in rubric.json.
+                # Drop it: scoring it would award points against no criterion.
+                anomalies["unknown"].append(num)
+                continue
+            if num in details:
+                # Judge returned the same criterion twice; keep the first
+                # verdict so `earned` cannot be double-counted.
+                anomalies["duplicate"].append(num)
+                continue
+
+            max_score = orig["score"]
+            raw_score = cr.get("score", 0)
+            try:
+                raw_score = float(raw_score)
+            except (TypeError, ValueError):
+                raw_score = 0.0
+            # Valid range runs between 0 and the criterion's max, whichever
+            # side of zero that max sits on (negative criteria score <= 0).
+            lo, hi = min(0, max_score), max(0, max_score)
+            awarded = max(lo, min(hi, raw_score))
+            if awarded != raw_score:
+                anomalies["clamped"].append(f"{num}({raw_score}->{awarded})")
+
+            earned += awarded
             details[num] = {
-                "criterion": orig["criterion"] if orig else "",
-                "met": cr.get("met", False),
-                "score": cr.get("score", 0),
-                "max_score": orig["score"] if orig else 0,
-                "importance": orig.get("importance", "") if orig else "",
-                "type": orig.get("type", "") if orig else "",
+                "criterion": orig["criterion"],
+                "met": bool(cr.get("met", False)),
+                "score": awarded,
+                "max_score": max_score,
+                "importance": orig.get("importance", ""),
+                "type": orig.get("type", ""),
                 "evidence": cr.get("evidence", ""),
             }
+
+        # Any criterion the judge never returned is recorded explicitly at 0
+        # rather than silently vanishing from the report.
+        for r in rubric:
+            if r["number"] not in details:
+                anomalies["missing"].append(r["number"])
+                details[r["number"]] = {
+                    "criterion": r["criterion"],
+                    "met": False,
+                    "score": 0,
+                    "max_score": r["score"],
+                    "importance": r.get("importance", ""),
+                    "type": r.get("type", ""),
+                    "evidence": "NOT RETURNED BY JUDGE - scored 0 by default.",
+                }
+
+        anomalies = {k: v for k, v in anomalies.items() if v}
+        if anomalies:
+            for kind, items in anomalies.items():
+                print(f"    Trial {trial_idx}: {kind} criteria -> {items}")
+
+        # Criteria are shuffled per trial to cancel position bias; re-sort the
+        # emitted map back into canonical rubric.json order so the report is
+        # stable and comparable across trials/tasks.
+        rubric_order = {r["number"]: i for i, r in enumerate(rubric)}
+        details = {
+            k: details[k]
+            for k in sorted(details, key=lambda n: (rubric_order.get(n, len(rubric_order)), n))
+        }
 
         score = earned / total_positive if total_positive > 0 else 0.0
         score = max(-1.0, min(1.0, score))
@@ -816,6 +1065,7 @@ Respond ONLY with the JSON array, no other text."""
             "total_positive": total_positive,
             "details": details,
             "usage": usage,
+            "anomalies": anomalies,
         }
     except Exception as e:
         print(f"  Trial {trial_idx}: failed ({e})")
@@ -907,7 +1157,7 @@ def evaluate_judge_calibration(task_dir, trajectory_log, test_results, llm_env, 
     if "host.docker.internal" in base_url:
         base_url = base_url.replace("host.docker.internal", "127.0.0.1")
 
-    judge_model = "claude-opus-4-8"
+    judge_model = env_default("JUDGE_MODEL", DEFAULT_JUDGE_MODEL)
     headers = {
         "content-type": "application/json",
         "anthropic-version": "2023-06-01",
@@ -1013,7 +1263,7 @@ def evaluate_rubric(task_dir, trajectory_log, llm_env, model):
     if "host.docker.internal" in base_url:
         base_url = base_url.replace("host.docker.internal", "127.0.0.1")
 
-    judge_model = "claude-opus-4-8"
+    judge_model = env_default("JUDGE_MODEL", DEFAULT_JUDGE_MODEL)
 
     headers = {
         "content-type": "application/json",
@@ -1027,8 +1277,8 @@ def evaluate_rubric(task_dir, trajectory_log, llm_env, model):
 
     url = f"{base_url.rstrip('/')}/v1/messages"
 
-    NUM_TRIALS = 11
-    MIN_TRIALS = 3
+    NUM_TRIALS = env_default_int("JUDGE_TRIALS", DEFAULT_JUDGE_TRIALS)
+    MIN_TRIALS = env_default_int("JUDGE_MIN_TRIALS", DEFAULT_JUDGE_MIN_TRIALS)
     trial_results = []
 
     print(f"  Rubric judge: running {NUM_TRIALS} trials with position randomization...")
@@ -1057,17 +1307,8 @@ def evaluate_rubric(task_dir, trajectory_log, llm_env, model):
     total_cache_creation = sum(r["usage"].get("cache_creation_input_tokens", 0) for r in trial_results)
     total_cache_read = sum(r["usage"].get("cache_read_input_tokens", 0) for r in trial_results)
 
-    PRICING = {
-        "claude-opus-4-8":   {"input": 15.0, "output": 75.0, "cache_write": 18.75, "cache_read": 1.50},
-        "claude-sonnet-4-6": {"input": 3.0,  "output": 15.0, "cache_write": 3.75,  "cache_read": 0.30},
-    }
-    prices = PRICING.get(judge_model, PRICING["claude-opus-4-8"])
-    total_cost = (
-        (total_input / 1_000_000) * prices["input"]
-        + (total_output / 1_000_000) * prices["output"]
-        + (total_cache_creation / 1_000_000) * prices["cache_write"]
-        + (total_cache_read / 1_000_000) * prices["cache_read"]
-    )
+    total_cost = estimate_cost_usd(judge_model, total_input, total_output,
+                                   total_cache_creation, total_cache_read)
 
     usage = {
         "input_tokens": total_input,
@@ -1106,6 +1347,8 @@ def evaluate_rubric(task_dir, trajectory_log, llm_env, model):
         "total_positive": median_trial["total_positive"],
         "judge_model": judge_model,
         "criteria": median_trial["details"],
+        "judge_anomalies": median_trial.get("anomalies", {}),
+        "trials_with_anomalies": sum(1 for r in trial_results if r.get("anomalies")),
         "judge_usage": usage,
         "trial_scores": [round(s, 6) for s in scores],
         "trials_succeeded": len(trial_results),
@@ -1215,6 +1458,59 @@ def record_judge_usage(run_dir, attempt, task_dir, log_file, llm_env, llm_model,
                   open(attempt_dir / "rubric_score.json", "w"), indent=2)
 
 
+def get_claude_subscription_id():
+    """Fetch account_uuid from the Claude OAuth profile for finance attribution.
+
+    Reads the OAuth token from macOS Keychain or ~/.claude/.credentials.json,
+    hits the profile endpoint, and returns the account UUID string.
+    Returns empty string on any failure (never raises).
+    """
+    try:
+        import platform as _plat
+        creds_raw = None
+        if _plat.system() == "Darwin":
+            r = subprocess.run(
+                ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+                capture_output=True, text=True,
+            )
+            if r.returncode == 0:
+                creds_raw = r.stdout.strip()
+        else:
+            cred_path = Path.home() / ".claude" / ".credentials.json"
+            if cred_path.exists():
+                creds_raw = cred_path.read_text()
+
+        if not creds_raw:
+            return ""
+
+        creds = json.loads(creds_raw)
+        access_token = creds.get("claudeAiOauth", {}).get("accessToken", "")
+        if not access_token:
+            return ""
+
+        url = "https://api.anthropic.com/api/oauth/profile"
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        if HAS_HTTPX:
+            resp = httpx.get(url, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                return ""
+            data = resp.json()
+        else:
+            import urllib.request
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read())
+
+        account_uuid = data.get("account", {}).get("uuid", "")
+        if account_uuid:
+            print(f"  [finance] subscription account: {data['account'].get('email', 'unknown')} ({account_uuid[:8]}...)")
+        return account_uuid
+    except Exception as e:
+        print(f"  [finance] Warning: could not fetch subscription ID: {e}")
+        return ""
+
+
 def start_claude_subscription_bridge(args):
     """Start the host-side Claude Code OAuth bridge and point the agent at it.
 
@@ -1292,10 +1588,20 @@ def main():
     ap.add_argument("--no-feedback", action="store_true",
                     help="Run each attempt independently with no cross-attempt feedback")
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
-    ap.add_argument("--model-provider", choices=["anthropic", "bedrock"], default="anthropic")
-    ap.add_argument("--anthropic-model-id", default="claude-opus-4-8")
-    ap.add_argument("--bedrock-model-id", default="us.anthropic.claude-sonnet-4-5-20250929-v1:0")
-    ap.add_argument("--aws-region", default="us-west-2")
+    ap.add_argument("--model-provider", choices=["anthropic", "bedrock"],
+                    default=env_default("MODEL_PROVIDER", DEFAULT_MODEL_PROVIDER),
+                    help=f"Model provider (env MODEL_PROVIDER, default: {DEFAULT_MODEL_PROVIDER}).")
+    ap.add_argument("--anthropic-model-id",
+                    default=env_default("ANTHROPIC_MODEL_ID", DEFAULT_AGENT_MODEL),
+                    help=f"Agent model (env ANTHROPIC_MODEL_ID, default: {DEFAULT_AGENT_MODEL}).")
+    ap.add_argument("--bedrock-model-id",
+                    default=env_default("BEDROCK_MODEL_ID", DEFAULT_BEDROCK_MODEL),
+                    help="Bedrock model id (env BEDROCK_MODEL_ID).")
+    ap.add_argument("--aws-region", default=env_default("AWS_REGION", DEFAULT_AWS_REGION),
+                    help=f"AWS region (env AWS_REGION, default: {DEFAULT_AWS_REGION}).")
+    ap.add_argument("--evidence-dir", default=os.environ.get("EVIDENCE_DIR"),
+                    help="Where to collect agent evidence such as crash.log "
+                         "(default: evidence/<task>/<timestamp>_e2e, outside agent_output/).")
     ap.add_argument("--output-dir", default=None,
                     help="Output directory (default: agent_output/<task>/<timestamp>)")
     ap.add_argument("--claude-subscription", action="store_true",
@@ -1342,6 +1648,10 @@ def main():
     claude_bridge = None
     if args.claude_subscription:
         claude_bridge = start_claude_subscription_bridge(args)
+        if not getattr(args, 'finance_subscription_id', ''):
+            sub_id = get_claude_subscription_id()
+            if sub_id:
+                args.finance_subscription_id = sub_id
 
     llm_env, llm_model = get_llm_env(args)
 
@@ -1356,6 +1666,15 @@ def main():
     output_dir.mkdir(exist_ok=True)
     trajectory_dir = run_dir / "trajectory"
     trajectory_dir.mkdir(exist_ok=True)
+    # Agent evidence (crash.log) is kept out of agent_output/ entirely: that
+    # tree holds the graded submission and its scores, and evidence is neither.
+    # Mirrors the run path so a run's evidence is still trivial to locate.
+    if args.evidence_dir:
+        evidence_dir = Path(args.evidence_dir)
+    else:
+        evidence_dir = (Path(__file__).parent / "evidence" / task_name /
+                        f"{timestamp}_e2e{iter_suffix}")
+    repo_dir = task_repo_dir(task_dir)
 
     print(f"Task: {task_name}")
     print(f"Agent: claude-code")
@@ -1448,6 +1767,24 @@ def main():
             subprocess.run(["docker", "cp", f"{cid}:/output/fix.patch", str(patch_file)],
                            capture_output=True)
 
+            # crash.log is the agent's evidence for what it found; it is
+            # collected outside agent_output/ (see evidence_dir).  The
+            # instruction asks the agent for it in both the source tree and
+            # /output, so try both; a task that never asks for one collects
+            # nothing and carries on.
+            evidence_dir.mkdir(parents=True, exist_ok=True)
+            crash_file = evidence_dir / (f"crash_attempt_{attempt}.log"
+                                         if args.max_attempts > 1 else "crash.log")
+            for src in ([f"{cid}:/output/crash.log"] +
+                        ([f"{cid}:{repo_dir}/crash.log"] if repo_dir else [])):
+                subprocess.run(["docker", "cp", src, str(crash_file)],
+                               capture_output=True)
+                if crash_file.exists():
+                    break
+            if crash_file.exists():
+                print(f"  Collected crash.log ({crash_file.stat().st_size} bytes) -> "
+                      f"{crash_file}")
+
             if not poc_file.exists():
                 print("  No PoC generated!")
                 all_attempts.append({
@@ -1490,7 +1827,9 @@ def main():
 
             print(f"\n  Grading (attempt {attempt}) in fresh container...")
             reward, stages, test_results, ctrf, verifier_output = run_verifier(
-                img_tag, task_dir, poc_file, patch_file)
+                img_tag, task_dir, poc_file, patch_file,
+                crash_path=crash_file if crash_file.exists() else None,
+                repo_dir=repo_dir)
 
             agent_success = (stages.get("stage1") == "passed" and
                              stages.get("stage2") == "passed" and
