@@ -34,12 +34,14 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _load_run_harbor():
-    """Import run_harbor.py as a module without executing its main()."""
-    spec = importlib.util.spec_from_file_location("run_harbor", REPO_ROOT / "run_harbor.py")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["run_harbor"] = module
-    spec.loader.exec_module(module)
-    return module
+    """Import the judge library (scripts/judge_lib.py).
+
+    Named for history: this used to reach into run_harbor.py for evaluate_rubric.
+    The judge now lives in its own module, so the runner is not imported at all.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import judge_lib
+    return judge_lib
 
 
 def resolve_inputs(args, rh):
@@ -106,12 +108,13 @@ def main():
     rh.load_dotenv()          # same .env the runner uses; real env still wins
 
     task_dir, traj_path = resolve_inputs(args, rh)
-    judge_model = rh.env_default("JUDGE_MODEL", rh.DEFAULT_JUDGE_MODEL)
+    provider = rh.env_default("JUDGE_PROVIDER", rh.DEFAULT_JUDGE_PROVIDER).lower()
+    judge_model = rh.judge_model_for(provider)
     trials = rh.env_default_int("JUDGE_TRIALS", rh.DEFAULT_JUDGE_TRIALS)
 
     print(f"Task:       {task_dir}")
     print(f"Trajectory: {traj_path} ({traj_path.stat().st_size} bytes)")
-    print(f"Judge:      {judge_model}  ({trials} trials)")
+    print(f"Judge:      {provider}:{judge_model}  ({trials} trials)")
 
     traj_text = traj_path.read_text(errors="replace")
     rubric_data = rh.evaluate_rubric(task_dir, traj_text, {}, judge_model)
@@ -129,6 +132,7 @@ def main():
 
     print(f"\nrubric_score = {rubric_data['rubric_score']:.6f} "
           f"({rubric_data['earned']}/{rubric_data['total_positive']})")
+    print(f"judged by:    {rubric_data.get('judge_provider')}:{rubric_data.get('judge_model')}")
     if rubric_data.get("judge_anomalies"):
         print(f"judge anomalies: {rubric_data['judge_anomalies']}")
     print(f"judge cost:   ${rubric_data.get('judge_usage', {}).get('cost_usd', 0.0):.4f}")

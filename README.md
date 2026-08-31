@@ -127,9 +127,15 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `ANTHROPIC_MODEL_ID` | Agent model; default `claude-opus-4-8` |
 | `BEDROCK_MODEL_ID` | Bedrock model id |
 | `AWS_REGION` | AWS region; default `us-west-2` |
-| `JUDGE_MODEL` | Rubric judge model; default `claude-opus-4-8` |
+| `JUDGE_PROVIDER` | Judge transport: `anthropic` or `codex`; default `anthropic` |
+| `JUDGE_FALLBACK_PROVIDER` | Used when the primary cannot reach `JUDGE_MIN_TRIALS`; default `anthropic` |
+| `JUDGE_MODEL` | Judge model; default per provider (`claude-opus-4-8` / `gpt-5.2-codex`) |
 | `JUDGE_TRIALS` | Judge trials per evaluation; default `11` |
 | `JUDGE_MIN_TRIALS` | Minimum trials that must succeed; default `3` |
+| `JUDGE_BASE_URL` | Override the judge endpoint (else: agent bridge, or `CODEX_BRIDGE_URL`) |
+| `JUDGE_API_KEY` | Override the judge credential |
+| `CODEX_BRIDGE_URL` | Codex bridge address; default `http://127.0.0.1:8788` |
+| `GOKU_CODEX_BRIDGE_SECRET` | Shared secret the `codex_oauth` bridge requires |
 | `EVIDENCE_DIR` | Overrides `--evidence-dir` |
 
 These are read from `.env` (loaded before arguments are parsed) or the real
@@ -171,7 +177,15 @@ avg_score (reward) = (pytest_score + rubric_score) / 2
 
 `pytest_score` is the weighted verifier — what the agent's PoC and patch actually
 did. `rubric_score` is an LLM judge reading the agent's trajectory. The judge is
-**half the final reward**.
+**half the final reward**, so it lives in its own module rather than inline in the
+runner:
+
+```
+scripts/judge_lib.py     the judge: prompts, transports, scoring, anomalies
+scripts/judge.py         CLI for re-judging a trajectory that already exists
+scripts/codex_oauth/     OAuth bridge for judging through a ChatGPT subscription
+run_harbor.py            imports judge_lib for the scoring pass
+```
 
 ### How the judge works
 
@@ -196,22 +210,83 @@ that takes the shortcut is penalised.
 - Input is the raw `agent.jsonl` transcript, truncated to 80K chars (first 40K +
   last 40K) if longer. **The judge never sees the verifier results**, so the two
   scores stay independent.
-- `JUDGE_TRIALS` trials (default 11) run at `temperature 0.0`, each with the
-  criteria order shuffled to cancel position bias. The **median** score wins, and
-  the median trial's per-criterion verdicts are what land in `rubric_score.json`.
+- `JUDGE_TRIALS` trials (default 11), each with the criteria order shuffled to
+  cancel position bias. The **median** score wins, and the median trial's
+  per-criterion verdicts are what land in `rubric_score.json`.
 - `rubric_score = earned / total_positive`, clamped to `[-1, 1]`.
-- The trajectory is the cached prompt prefix, so 11 trials cost roughly one full
-  prompt rather than eleven.
 - Alongside the score it records a 90% conformal interval over the trial scores
   and a perturbation check (`stdev < 0.15`).
 
 Because criteria are shuffled per trial, `rubric_score.json` re-sorts them back to
 canonical rubric order before writing. Malformed judge output is recorded rather
-than silently absorbed, under `judge_anomalies`: a criterion the judge omitted is
-scored 0 and marked `NOT RETURNED BY JUDGE`, a duplicate keeps only the first
-verdict, an unknown criterion id is dropped, and an out-of-range score is clamped
-to the criterion's declared range. `trials_with_anomalies` counts how many of the
-trials were affected.
+than silently absorbed, under `judge_anomalies`:
+
+| anomaly | what it catches |
+|---------|-----------------|
+| `missing` | criterion the judge never returned — scored 0, marked `NOT RETURNED BY JUDGE` |
+| `duplicate` | same criterion twice — first verdict wins, no double-counting |
+| `unknown` | criterion id not in `rubric.json` — dropped, scores nothing |
+| `clamped` | score outside the criterion's declared range — clamped to it |
+| `incoherent` | `met` and `score` contradict each other (e.g. `met: false, score: 1.0`) |
+
+`trials_with_anomalies` counts how many trials were affected. Each of these moves
+`earned` without leaving a trace if it is not recorded.
+
+### Judge providers
+
+Two transports sit behind one interface. Prompt construction, verdict parsing,
+scoring, clamping, anomaly capture and the canonical re-sort are shared, so
+switching provider cannot change *how* a verdict is scored — only who produced it.
+
+| provider | endpoint | auth | default model |
+|----------|----------|------|---------------|
+| `anthropic` | `<base>/v1/messages` | `ANTHROPIC_API_KEY` / bridge | `claude-opus-4-8` |
+| `codex` | `<base>/v1/chat/completions` | `GOKU_CODEX_BRIDGE_SECRET` | `gpt-5.2-codex` |
+
+Usage accounting is normalised to the Anthropic key names at the transport
+boundary (`input_tokens`, `output_tokens`, `cache_read_input_tokens`,
+`cache_creation_input_tokens`), because `rubric_score.json`,
+`scripts/finance_client.py` and the Finance API `judge_lines` already speak them.
+`rubric_score.json` records `judge_provider` (who answered) and
+`judge_provider_requested` (who was asked).
+
+**Fallback.** If the primary provider cannot produce `JUDGE_MIN_TRIALS` usable
+trials, `JUDGE_FALLBACK_PROVIDER` is tried before giving up. Without it, a dead
+bridge or an expired credential returns `rubric_score: 0.0` and `avg_score`
+silently falls back to `pytest_score` alone — half the reward gone with only a
+warning line.
+
+**Codex caveat.** The bridge strips `temperature` and `max_output_tokens` before
+the backend sees them, so a Codex judge **cannot be pinned to `temperature 0`** and
+will vary more between trials than the Anthropic transport. Raise `JUDGE_TRIALS`
+rather than lower it. Judging through a subscription also multiplies request
+volume by the trial count; watch the quota.
+
+### Judging through a ChatGPT subscription
+
+`scripts/codex_oauth/` is the Codex mirror of `scripts/claude_oauth/`: it accepts
+Chat Completions requests, swaps the caller's shared secret for the OAuth token in
+`~/.codex/auth.json`, and forwards to the Codex backend.
+
+```bash
+# One-time: authenticate the codex CLI
+npm install -g @openai/codex && codex login
+
+# Verify the credentials load
+(cd scripts && python -m codex_oauth --check)
+
+# Run the bridge
+export GOKU_CODEX_BRIDGE_SECRET=$(uuidgen)
+(cd scripts && python -m codex_oauth --host 127.0.0.1 --port 8788) &
+
+# Point the judge at it
+JUDGE_PROVIDER=codex CODEX_BRIDGE_URL=http://127.0.0.1:8788 \
+    python run_harbor.py tasks/<task> --claude-subscription
+```
+
+Set `GOKU_CODEX_BRIDGE_SECRET` — without it the bridge is unauthenticated and any
+local process can spend your quota. Never commit `auth.json`; it is a live OAuth
+credential.
 
 ### Judging on its own
 
@@ -221,7 +296,7 @@ changed, and there is nothing to add to the command. `scripts/judge.py` is an
 rubric revision or a disputed score costs judge calls instead of a whole run.
 
 ```bash
-# Start the bridge first if ANTHROPIC_BASE_URL points at one; run_harbor.py
+# Start the bridge first if the judge's base URL points at one; run_harbor.py
 # normally starts its own, so nothing is listening between runs.
 (cd scripts && python -m claude_oauth --host 127.0.0.1 --port 3456) &
 
