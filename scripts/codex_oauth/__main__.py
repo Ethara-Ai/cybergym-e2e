@@ -39,7 +39,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[codex-bridge] listening on http://{args.host}:{args.port}")
     print("[codex-bridge] point clients at:")
     print(f"           export OPENAI_BASE_URL=http://{args.host}:{args.port}")
-    print("           export OPENAI_API_KEY=$GOKU_CODEX_BRIDGE_SECRET   # (or a stub)")
+    print("           export OPENAI_API_KEY=$KAKASHI_CODEX_BRIDGE_SECRET   # (or a stub)")
     uvicorn.run(build_app(provider), host=args.host, port=args.port, log_level=args.log_level)
     return 0
 

@@ -31,6 +31,14 @@ for arg in "$@"; do
     esac
 done
 
+shopt -s nullglob
+dockerfiles=("$TASKS_DIR"/*/environment/Dockerfile)
+if [ ! -d "$TASKS_DIR" ] || [ "${#dockerfiles[@]}" -eq 0 ]; then
+    echo "ERROR: no task Dockerfiles under $TASKS_DIR (tasks/ is gitignored and absent from a" >&2
+    echo "       clean clone; generate tasks first or set TASKS_DIR)" >&2
+    exit 1
+fi
+
 echo "=== Docker Image Pinning Tool ==="
 echo ""
 
@@ -38,7 +46,7 @@ pinned=0
 unpinned=0
 errors=0
 
-for dockerfile in "$TASKS_DIR"/*/environment/Dockerfile; do
+for dockerfile in "${dockerfiles[@]}"; do
     task=$(basename "$(dirname "$(dirname "$dockerfile")")")
     from_line=$(grep '^FROM ' "$dockerfile" | head -1)
     image=$(echo "$from_line" | sed 's/^FROM //' | awk '{print $1}')

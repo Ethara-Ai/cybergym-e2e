@@ -244,7 +244,7 @@ These are copied out of the container to the host.
 
 **Details:**
 - Reads `rubric.json` from `tasks/<task>/tests/rubric.json`
-- Reads agent trajectory from `trajectory/agent.jsonl` (truncated to 80K chars if longer — first 40K + last 40K)
+- Reads the complete agent trajectory from `trajectory/agent.jsonl`; only the per-event envelope is stripped, every message, tool call and tool result is sent in full (see `trajectory` in `rubric_score.json` for exactly what was judged)
 - Each rubric criterion has:
   - `number`: e.g. "R1", "R2", ...
   - `criterion`: what to evaluate (e.g. "The response explains that the wide character length scan receives a byte length where a count of 2 byte character units is needed")
@@ -252,7 +252,7 @@ These are copied out of the container to the host.
   - `score`: max points (positive for good, negative for bad)
 - Sends prompt to Claude Opus 4.8 via Anthropic Messages API
   - Temperature: 0.0
-  - Max tokens: 4096
+  - Max tokens: 8192
   - If using OAuth bridge, rewrites `host.docker.internal` → `127.0.0.1` for host-side call
 - Judge returns JSON array with: number, score, met (bool), evidence (one sentence)
 - Computes: `rubric_score = earned / total_positive`

@@ -27,6 +27,42 @@ The final pytest score is computed as `sum(passed_weights) / sum(positive_weight
 
 An LLM-based rubric judge also evaluates the agent trajectory against per-task criteria (e.g., reading the fuzzer harness, tracing the code path, testing the PoC). The final reward is the average of the pytest score and rubric score.
 
+### Recommended invocation for a long run
+
+```bash
+mkdir -p run_logs
+nohup python3 -u run_harbor.py tasks/<task> --claude-subscription --timeout 14400 --max-attempts 1 \
+  > run_logs/<task>.log 2>&1 &
+tail -f run_logs/<task>.log
+```
+
+`-u` matters: without it Python buffers stdout when it goes to a file and the
+log stays empty until the run ends. Read the log top to bottom and expect, in
+order:
+
+1. `[bridge] ready` and `[finance] subscription account: <you>` — the bridge is
+   up on **your** current `claude` login (the freshest credentials win).
+2. `Mode: e2e|patch-only` and `Required stages (from test_weights.json): [...]`
+   — a patch-only task lists only the stages it grades.
+3. `Container:`, `Installing Claude Code`, then
+   `Isolated network harbor-iso-...: agent -> bridge-relay:<port> -> ...`,
+   `Network locked (bridge): only port <port> to <ip>` and
+   `Isolation verified from inside the sandbox: endpoint reachable, internet not, iptables locked`.
+   A `!!` banner or `ISOLATION ERROR` here means the sandbox is not sealed and
+   the run will not be scored.
+4. `Running Claude Code agent` followed by `[agent]` events. Long silences are
+   normally the agent waiting on a build; check with
+   `docker exec <container> ps -eo etime,%cpu,comm --sort=-%cpu | head`.
+5. `Grading (attempt N) in fresh container...`, the verifier's `[PASS]`/`[FAIL]`
+   lines, an optional `[gate]` line naming fired cheat tests, `[grade] ...`.
+6. `Evaluating rubric` (or `Rubric judge SKIPPED (--no-judge)`), then the
+   score block and `Status:`.
+
+A killed runner (SIGTERM/Ctrl-C) tears down its container, relay, network and
+bridge; the bridge also exits by itself if the runner disappears. Runs share
+the subscription's rate limit: a 429 with a reset time parks the in-container
+CLI until that time, so run one task at a time on a single account.
+
 ## Setup
 
 Install Python dependencies:
@@ -110,6 +146,11 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `--claude-subscription` | off | Route through the Claude Code OAuth bridge using your Max/Pro subscription (forces `--model-provider anthropic`) |
 | `--cc-bridge-port` | ephemeral | Fixed host port for the OAuth bridge |
 | `--cc-bridge-secret` | random | Pin the bridge shared secret (default: random per run) |
+| `--no-judge` | off | Skip the rubric judge and calibration. Reward = `pytest_score` alone; every score file and `summary.json` carry `scoring: pytest_only`, so the number cannot be mistaken for a judged one. Use for verifier smoke tests |
+| `--shared-network` | off | Keep the agent container on the default Docker bridge instead of an `--internal` network with a one-port relay (weaker isolation; flagged `isolated_network: false`) |
+| `--no-lockdown` | off | Do not firewall the agent container (flagged in `summary.json`; the run is not trustworthy). Debugging only |
+| `--no-sweep` | off | Skip the startup removal of stale `harbor-*` containers and `harbor-iso-*` networks older than 24 h |
+| `--self-test` | off | Run the runner's internal checks (stdout parser, stage mapping) and exit |
 | `--no-feedback` | off | Disable feedback between attempts |
 
 **Environment variables:**
@@ -128,14 +169,19 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `BEDROCK_MODEL_ID` | Bedrock model id |
 | `AWS_REGION` | AWS region; default `us-west-2` |
 | `JUDGE_PROVIDER` | Judge transport: `anthropic` or `codex`; default `anthropic` |
-| `JUDGE_FALLBACK_PROVIDER` | Used when the primary cannot reach `JUDGE_MIN_TRIALS`; default `anthropic` |
-| `JUDGE_MODEL` | Judge model; default per provider (`claude-opus-4-8` / `gpt-5.2-codex`) |
+| `JUDGE_FALLBACK_PROVIDER` | Second provider tried when the primary cannot reach `JUDGE_MIN_TRIALS`; default unset (no fallback; must differ from `JUDGE_PROVIDER`) |
+| `JUDGE_MAX_RETRIES` | Transport retries per judge call (backoff + jitter, honours `Retry-After`); default `4` |
+| `JUDGE_COST_ESTIMATION` | Set `0` on subscription-served runs to suppress list-price cost lines; unpriced models always report `0.0` with `cost_known: false` |
+| `JUDGE_MODEL` | Judge model; default per provider (`claude-opus-4-8` / `gpt-5.6-sol`) |
 | `JUDGE_TRIALS` | Judge trials per evaluation; default `11` |
+| `JUDGE_TOOL_RESULT_CAP` / `JUDGE_TOOL_INPUT_CAP` | Optional per-block head+tail clip for tool results / inputs in the judge prompt; default `0` (send in full) |
+| `JUDGE_MAX_TRAJ_CHARS` | Ceiling on trajectory chars per judge call, guard against API rejection only; default `1500000` |
+| `JUDGE_TIMEOUT` | HTTP timeout per judge call in seconds; default `600` |
 | `JUDGE_MIN_TRIALS` | Minimum trials that must succeed; default `3` |
 | `JUDGE_BASE_URL` | Override the judge endpoint (else: agent bridge, or `CODEX_BRIDGE_URL`) |
 | `JUDGE_API_KEY` | Override the judge credential |
 | `CODEX_BRIDGE_URL` | Codex bridge address; default `http://127.0.0.1:8788` |
-| `GOKU_CODEX_BRIDGE_SECRET` | Shared secret the `codex_oauth` bridge requires |
+| `KAKASHI_CODEX_BRIDGE_SECRET` | Shared secret the `codex_oauth` bridge requires |
 | `EVIDENCE_DIR` | Overrides `--evidence-dir` |
 
 These are read from `.env` (loaded before arguments are parsed) or the real
@@ -146,7 +192,13 @@ line — everything after `=` is taken verbatim.
 
 ### Agent Network Isolation
 
-The agent container runs with `iptables`-based network lockdown: all outbound traffic is blocked except to the API bridge (the OAuth proxy or direct API endpoint). This prevents the agent from downloading solutions or using the network to look up known vulnerabilities, which would invalidate the benchmark.
+The agent container runs with `iptables`-based network lockdown on **both** credential paths: with the OAuth bridge only the bridge IP:port is reachable; with a plain API key `api.anthropic.com` is resolved once, pinned in `/etc/hosts`, and only those addresses on port 443 are allowed (DNS stays blocked). This prevents the agent from downloading solutions or using the network to look up known vulnerabilities, which would invalidate the benchmark.
+
+The agent has passwordless `sudo` (build scripts need root), so the rules alone would not hold: before the agent starts, `CAP_NET_ADMIN`/`CAP_NET_RAW` are removed from the bounding set of the agent's process tree (`setpriv`), and a setuid-root exec cannot regain a capability outside its bounding set. `sudo iptables -F` therefore fails with `EPERM` while `sudo bash compile.sh` still works. The outcome is recorded in `summary.json` under `isolation` (`lockdown_applied`, `lockdown_mode`, `net_admin_dropped`); a run where either is `false` prints a loud warning and should not be trusted.
+
+**Outside lock (default).** After Claude Code is installed, the agent container is moved onto a Docker `--internal` network that has no route anywhere. The only other member is a one-port relay container (`alpine/socat`, pinned) that forwards `bridge-relay:<port>` to the LLM endpoint on the host. Even root with NET_ADMIN inside the agent container has no interface that leads out. `--shared-network` keeps the old single-bridge layout (weaker; flagged `isolated_network: false`). Bedrock runs use the in-container lockdown only, because they need several regional hosts.
+
+**Self-check and hard fail.** Before the agent starts, the runner probes the sandbox from the agent's own vantage point (as user `agent`, capabilities dropped): the endpoint must be reachable, `1.1.1.1:80` must not, and `sudo iptables` must fail. If any probe fails, or the lockdown could not be applied, the attempt is recorded as `isolation_error` and **no reward is written**. `--no-lockdown` turns this into a warning for debugging only.
 
 The lockdown is applied automatically after Claude Code is installed. The verifier container retains full network access because some tasks require downloading build dependencies during compilation.
 
@@ -207,15 +259,19 @@ Negative criteria are traps — network access, reading ground-truth files, patc
 the harness instead of the library. An honest agent scores 0 on those; an agent
 that takes the shortcut is penalised.
 
-- Input is the raw `agent.jsonl` transcript, truncated to 80K chars (first 40K +
-  last 40K) if longer. **The judge never sees the verifier results**, so the two
+- Input is the **complete** `agent.jsonl` transcript (see *What the judge
+  reads* below). **The judge never sees the verifier results**, so the two
   scores stay independent.
 - `JUDGE_TRIALS` trials (default 11), each with the criteria order shuffled to
   cancel position bias. The **median** score wins, and the median trial's
   per-criterion verdicts are what land in `rubric_score.json`.
 - `rubric_score = earned / total_positive`, clamped to `[-1, 1]`.
-- Alongside the score it records a 90% conformal interval over the trial scores
-  and a perturbation check (`stdev < 0.15`).
+- `rubric_score` is the **lower median** of the trial scores, so it is always the
+  score of a real trial and its `earned` / criteria come from that same trial.
+- Alongside the score it records a conformal interval over the trial scores with
+  its **achieved** coverage (`conformal_coverage`, e.g. 83% at 11 trials — the 90%
+  nominal figure needs 19+ trials, below that the interval is `[min, max]`) and a
+  perturbation check (`stdev < 0.15`).
 
 Because criteria are shuffled per trial, `rubric_score.json` re-sorts them back to
 canonical rubric order before writing. Malformed judge output is recorded rather
@@ -232,6 +288,56 @@ than silently absorbed, under `judge_anomalies`:
 `trials_with_anomalies` counts how many trials were affected. Each of these moves
 `earned` without leaving a trace if it is not recorded.
 
+### What the judge reads
+
+The judge is sent the **whole run**. `agent.jsonl` is compacted before it goes
+into the prompt, and compaction is lossless for anything a rubric can score:
+
+| kept in full | dropped |
+|--------------|---------|
+| every thinking block, assistant and user message | per-event envelope: `uuid`, `parentUuid`, `sessionId`, timestamps, `cwd`, `gitBranch` |
+| every tool call, with its complete arguments | |
+| every tool result, complete | |
+| the final `result` event | |
+
+The envelope is roughly two thirds of the raw bytes and carries nothing gradable,
+so a 300K-char log becomes ~100K chars with no tool output shortened. Nothing is
+clipped or sliced by default. Three limits exist and all are off or out of reach
+unless you set them:
+
+| env | default | what it does |
+|-----|---------|--------------|
+| `JUDGE_TOOL_RESULT_CAP` / `JUDGE_TOOL_INPUT_CAP` | `0` (unlimited) | opt-in head+tail clip per tool result / tool input, for cost-constrained deployments only |
+| `JUDGE_MAX_TRAJ_CHARS` | `1500000` | guard against the API rejecting an oversized request; sized for the judge model's 1M-token window (judged prompts measure ~1.8 chars/token). The largest recorded run compacts to ~720K chars. `0` disables it |
+| `JUDGE_TIMEOUT` | `600` s | HTTP timeout per judge call |
+
+If a limit ever fires, the judge is told in the prompt that the record is
+partial and how (a `...[N chars omitted]...` or `[TRUNCATED ...]` marker sits
+where the cut was), and it is instructed not to treat an omitted region as
+evidence of absence. Every verdict records what it was based on, in
+`rubric_score.json` and `calibration.json`:
+
+```json
+"trajectory": {
+  "raw_chars": 294745, "compacted_chars": 99589, "judged_chars": 99589,
+  "compaction": "compacted",        // or "raw_fallback" if the event schema was not recognised
+  "events": 99, "blocks": 98,
+  "tool_result_cap": 0, "tool_input_cap": 0,
+  "clipped_blocks": 0, "clipped_chars": 0,
+  "max_chars": 1500000, "truncated": false, "dropped_chars": 0,
+  "complete": true                  // true only if nothing was clipped or truncated
+}
+```
+
+`complete: true` is the guarantee that the score is on the full run.
+
+**Old verdicts.** Before 2026-09-02 the judge did not read the full run: it
+clipped every tool block to a 1500/800-char head+tail, and earlier still it kept
+only an 80K-char slice of the raw log. Both of those limits are removed and no
+longer exist in the code. A `rubric_score.json` without a `trajectory` block was
+produced by that old judge; re-score it with `scripts/judge.py` rather than
+trusting it.
+
 ### Judge providers
 
 Two transports sit behind one interface. Prompt construction, verdict parsing,
@@ -241,7 +347,7 @@ switching provider cannot change *how* a verdict is scored — only who produced
 | provider | endpoint | auth | default model |
 |----------|----------|------|---------------|
 | `anthropic` | `<base>/v1/messages` | `ANTHROPIC_API_KEY` / bridge | `claude-opus-4-8` |
-| `codex` | `<base>/v1/chat/completions` | `GOKU_CODEX_BRIDGE_SECRET` | `gpt-5.2-codex` |
+| `codex` | `<base>/v1/chat/completions` | `KAKASHI_CODEX_BRIDGE_SECRET` | `gpt-5.6-sol` |
 
 Usage accounting is normalised to the Anthropic key names at the transport
 boundary (`input_tokens`, `output_tokens`, `cache_read_input_tokens`,
@@ -251,16 +357,32 @@ boundary (`input_tokens`, `output_tokens`, `cache_read_input_tokens`,
 `judge_provider_requested` (who was asked).
 
 **Fallback.** If the primary provider cannot produce `JUDGE_MIN_TRIALS` usable
-trials, `JUDGE_FALLBACK_PROVIDER` is tried before giving up. Without it, a dead
-bridge or an expired credential returns `rubric_score: 0.0` and `avg_score`
-silently falls back to `pytest_score` alone — half the reward gone with only a
-warning line.
+trials, `JUDGE_FALLBACK_PROVIDER` (if set to a *different* provider) is tried
+before giving up. Each judge call also retries transport failures and 429/5xx
+with backoff. If the judge is still unavailable the reward formula does **not**
+change: the attempt scores `(pytest_score + 0) / 2`, is flagged
+`judge_available: false` in `reward.json` / `summary.json`, and prints a banner.
+Re-run such attempts once the judge is reachable rather than comparing them.
 
 **Codex caveat.** The bridge strips `temperature` and `max_output_tokens` before
 the backend sees them, so a Codex judge **cannot be pinned to `temperature 0`** and
 will vary more between trials than the Anthropic transport. Raise `JUDGE_TRIALS`
 rather than lower it. Judging through a subscription also multiplies request
 volume by the trial count; watch the quota.
+
+**Model names.** A ChatGPT-account subscription accepts only bare model slugs the
+account is entitled to (e.g. `gpt-5.6-sol`, `gpt-5.5`, `gpt-5.4`); it rejects
+`-codex`-suffixed ids and plain `gpt-5` with *"model is not supported when using
+Codex with a ChatGPT account"*. The codex default is therefore `gpt-5.6-sol`.
+Override per run with `JUDGE_MODEL_CODEX`. To see what a logged-in account can
+use, read `~/.codex/models_cache.json`.
+
+**Reasoning and the calibration call.** The Codex reasoning models fold reasoning
+tokens into the completion budget, so the diagnostic calibration call uses an
+8192-token cap (`calibration_call` in `judge_lib.py`); at the old 4096 it
+intermittently truncated the predictions JSON and dropped the calibration for
+that attempt (`calibration.json` is skipped, never partial). The rubric score is
+unaffected — it uses its own budget.
 
 ### Judging through a ChatGPT subscription
 
@@ -276,7 +398,7 @@ npm install -g @openai/codex && codex login
 (cd scripts && python -m codex_oauth --check)
 
 # Run the bridge
-export GOKU_CODEX_BRIDGE_SECRET=$(uuidgen)
+export KAKASHI_CODEX_BRIDGE_SECRET=$(uuidgen)
 (cd scripts && python -m codex_oauth --host 127.0.0.1 --port 8788) &
 
 # Point the judge at it
@@ -284,7 +406,7 @@ JUDGE_PROVIDER=codex CODEX_BRIDGE_URL=http://127.0.0.1:8788 \
     python run_harbor.py tasks/<task> --claude-subscription
 ```
 
-Set `GOKU_CODEX_BRIDGE_SECRET` — without it the bridge is unauthenticated and any
+Set `KAKASHI_CODEX_BRIDGE_SECRET` — without it the bridge is unauthenticated and any
 local process can spend your quota. Never commit `auth.json`; it is a live OAuth
 credential.
 
@@ -298,7 +420,9 @@ rubric revision or a disputed score costs judge calls instead of a whole run.
 ```bash
 # Start the bridge first if the judge's base URL points at one; run_harbor.py
 # normally starts its own, so nothing is listening between runs.
-(cd scripts && python -m claude_oauth --host 127.0.0.1 --port 3456) &
+# --bridge-secret (or WCB_CC_BRIDGE_SECRET) is required for any non-loopback bind;
+# clients present the same value as ANTHROPIC_API_KEY.
+(cd scripts && python -m claude_oauth --host 127.0.0.1 --port 3456 --bridge-secret "$WCB_CC_BRIDGE_SECRET") &
 
 # Judge a completed run (task and trajectory are inferred from the directory)
 python scripts/judge.py agent_output/<task>/<timestamp>_e2e -o /tmp/rubric.json
@@ -316,11 +440,46 @@ JUDGE_TRIALS=3 JUDGE_MODEL=claude-sonnet-4-6 \
 and `summary.json` and `reward.json` are not recomputed, so the run would be left
 internally inconsistent.
 
+**Re-scoring verdicts made on clipped input.** Any `rubric_score.json` without a
+`trajectory` block was judged before the judge read the full run. Re-judging is
+the same command; it reads the saved log, so the agent is not re-run. Compare the
+new file's `conformal_interval` and `perturbation_stdev` with the old: with the
+complete record the spread typically halves.
+
 **Few trials are noisy.** At `JUDGE_TRIALS=3` the median can swing on a single
 criterion; two runs over the same trajectory with the same judge have produced
 `1.000000` and `0.948718`. Treat a low trial count as a smoke test, not a score.
 
-### Legacy Runner
+### Task contract (files the runner and QC gate read)
+
+- `task.toml` carries a top-level `mode = "e2e" | "patch-only"`; `artifacts` must
+  agree with it. The runner derives the *required* stages from
+  `tests/test_weights.json` (a patch-only task has no stage 1), so `status:
+  success` means every stage the task actually grades passed.
+- `scripts/stage_names.py` is the single stage-name table used by both
+  `run_harbor.py` and `scripts/qc_harbor.py`. A task with custom test names ships
+  `tests/stage_map.json` (`{"stage1": "test_...", ...}`) instead of editing it.
+- `tests/cheat_gates.json` maps each negative-weight test to the positive tests
+  whose credit it invalidates; `tests/test.sh` zeroes that credit when the cheat
+  fires, so a cheat can never out-score honest partial work.
+- `python scripts/qc_harbor.py <task>` is static. Pass `--run-reference` to build
+  the environment and grade `solution/` end to end (blocking `RR-01`, reward >=
+  0.95); until then the report says `REFERENCE RUN SKIPPED`.
+- `python run_harbor.py --self-test` runs the runner's internal checks;
+  `--no-sweep` skips the startup removal of stale `harbor-*` containers;
+  `--no-lockdown` disables the firewall (flagged in `summary.json`; never for a
+  run you intend to report).
+- Stage oracle: a "crash" is a sanitizer/fuzzer *report* in the output of
+  `run_poc.sh` (run with `bash -ux`, not `-e`), never a bare nonzero exit. Stages
+  2 and 4 also fail when the fuzz target did not run at all (exit 126/127), so a
+  patch that deletes the target is not "neutralized".
+
+### Legacy Runner (deprecated)
+
+`scripts/run_agent.py` scores on a binary scale, writes none of the
+`reward` / `ctrf.json` / `rubric_score.json` files, applies no network lockdown
+and pins no platform. Its numbers are not comparable to `run_harbor.py` output.
+Kept only for reference:
 
 ```bash
 # Single task (requires boto3 and other SDK dependencies)
@@ -353,7 +512,9 @@ agent_output/<task>/<timestamp>_e2e/
     ├── reward.json           # Combined scores, stage details
     ├── ctrf.json             # CTRF-format test results with per-test durations and weights
     ├── test-stdout.txt       # Raw verifier stdout with pass/fail per test
-    ├── rubric_score.json     # LLM rubric judge score with per-criterion details, cost_usd
+    ├── rubric_score.json     # LLM rubric judge score with per-criterion details, cost_usd,
+    │                         #   and `trajectory` (what the judge read; `complete: true` = full run)
+    ├── calibration.json      # Diagnostic: judge's predictions of the verifier outcome vs actual
     ├── avg_score.json        # Average of pytest and rubric scores
     └── attempt_N/            # Per-attempt score files (when --max-attempts > 1)
         ├── ctrf.json
@@ -376,6 +537,20 @@ evidence/<task>/<timestamp>_e2e/
 alongside `poc.bin` and `fix.patch`. Tasks that grade the agent's crash report read
 it there. A task that never asks for one simply collects nothing.
 
+### Run status values
+
+| `status` | Meaning |
+|---|---|
+| `success` | every stage the task grades (`required_stages`) passed |
+| `failed` | graded, at least one required stage did not pass |
+| `verifier_error` | `test.sh` exited without writing `reward.json` (broken oracle, not a score); `reward.txt` is **not** written |
+| `harness_error` | an exception outside the verifier; no `reward.txt` |
+| `isolation_error` | the sandbox could not be sealed or the self-probe failed; no `reward.txt` |
+
+Per-attempt records carry the same value in `attempts[].status`, plus
+`skipped:no_poc` / `skipped:no_patch` for attempts that produced no artefact
+(these always score 0.0 and never out-rank a graded attempt).
+
 ### summary.json
 
 Contains all run metadata and detailed results:
@@ -390,7 +565,13 @@ Contains all run metadata and detailed results:
   "pytest_score": 1.0,
   "rubric_score": 0.87,
   "avg_score": 0.93,
-  "best_reward": 0.93,
+  "best_reward": 0.93,          // null when no attempt was scored
+  "judge_available": true,      // false = rubric_score is a 0.0 placeholder
+  "scoring": "pytest_and_rubric_mean",   // or "pytest_only" when run with --no-judge
+  "mode": "e2e",                // or "patch-only" (from task.toml)
+  "required_stages": ["stage1", "stage2", "stage3", "stage4"],
+  "isolation": { "lockdown_applied": true, "lockdown_mode": "bridge", "net_admin_dropped": true,
+                 "isolated_network": true, "verified": true, "verify_reason": "" },
   "stages": {
     "stage1": { "status": "passed" },
     "stage2": { "status": "passed" },
@@ -414,7 +595,8 @@ Contains all run metadata and detailed results:
         "evidence": "..."
       }
     },
-    "judge_usage": { "cost_usd": 0.90 }
+    "judge_usage": { "cost_usd": 0.90 },
+    "trajectory": { "complete": true, "raw_chars": 294745, "judged_chars": 99589, "clipped_blocks": 0, "truncated": false }
   },
   "attempts": [ { "attempt": 1, "stage1": "passed", "..." : "..." } ],
   "duration_seconds": 3931.2,

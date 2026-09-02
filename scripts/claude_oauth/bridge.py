@@ -281,6 +281,13 @@ def _max_stream_buffer_retries() -> int:
 # Seconds between SSE keepalive pings emitted to the client while the bridge is
 # buffering/retrying upstream (keeps the client<->bridge connection from timing out).
 _STREAM_KEEPALIVE_SECS = 15
+# Hard cap on one buffered upstream response.  A runaway stream must not grow
+# a bytearray without bound; 64 MiB is far beyond any real turn.
+_MAX_BUFFER_BYTES = 64 * 1024 * 1024
+# How long the buffered path waits for upstream to reveal its status before
+# committing to a 200 SSE response.  Definitive errors (401/400/429/5xx after
+# retries) arrive quickly, so they can be relayed with their real status.
+_FIRST_STATUS_WAIT_SECS = 20.0
 # The exact ping event Anthropic itself emits — every client already ignores it
 # for content, so it's the safest keepalive to synthesize.
 _SSE_PING = b'event: ping\ndata: {"type": "ping"}\n\n'
@@ -455,8 +462,16 @@ def normalize_body_for_anthropic_direct(body: dict[str, Any]) -> dict[str, Any]:
     # removed outright; `temperature` is dropped too since omitting it is
     # accepted by every model (the model applies its default). Safe for older
     # models and for Claude Code's own requests (which never set these).
-    for _deprecated_sampling in ("top_p", "top_k", "temperature"):
-        body.pop(_deprecated_sampling, None)
+    # WCB_CC_STRIP_SAMPLING=0 keeps them (e.g. a caller pinning temperature=0
+    # on a model that still accepts it); the strip is logged once per process.
+    if os.environ.get("WCB_CC_STRIP_SAMPLING", "1") != "0":
+        stripped = [k for k in ("top_p", "top_k", "temperature") if k in body]
+        for _deprecated_sampling in stripped:
+            body.pop(_deprecated_sampling, None)
+        if stripped and not getattr(normalize_body_for_anthropic_direct, "_warned", False):
+            normalize_body_for_anthropic_direct._warned = True  # type: ignore[attr-defined]
+            _LOG.info("dropping sampling params %s from requests (WCB_CC_STRIP_SAMPLING=0 to keep)",
+                      stripped)
     if "output_config" in body:
         body.pop("output_config", None)
     thinking = body.get("thinking")
@@ -591,7 +606,12 @@ def _apply_classification_to_provider(
             provider.mark_account_invalid(token_used)
     else:
         if classified.kind == ErrorKind.OAUTH_TOKEN_INVALID:
-            provider.force_reload()
+            # Only discard the in-memory token if it is the one that 401'd;
+            # a refresh may already have replaced it (see B-03).
+            try:
+                provider.force_reload(token_used)
+            except TypeError:  # provider without the token-aware signature
+                provider.force_reload()
 
 
 def _build_error_response(
@@ -605,7 +625,9 @@ def _build_error_response(
     if upstream_headers is not None:
         for k, v in upstream_headers.items():
             kl = k.lower()
-            if kl.startswith("anthropic-ratelimit-") or kl in ("request-id", "anthropic-request-id", "retry-after"):
+            # retry-after is set once below from the classified value (copying
+            # it here as well produced a duplicated "77, 77" header).
+            if kl.startswith("anthropic-ratelimit-") or kl in ("request-id", "anthropic-request-id"):
                 headers[k] = v
     if classified.retry_after_seconds is not None:
         headers["Retry-After"] = str(max(1, classified.retry_after_seconds))
@@ -1018,6 +1040,19 @@ async def _stream_buffered_with_retry(
     # end-of-turn burst by design (buffer-and-retry semantics unchanged).
     tee = StreamTee(source="agent")
 
+    loop = asyncio.get_running_loop()
+    # Resolved as soon as the outcome's HTTP status is known: ("stream",
+    # status, headers) once a 2xx upstream is open, or the terminal error
+    # kind.  Lets the handler send the REAL status code instead of 200.
+    status_fut: "asyncio.Future[Tuple[str, int, dict]]" = loop.create_future()
+
+    def _settle(kind: str, status: int, hdrs: Any = None) -> None:
+        if not status_fut.done():
+            try:
+                status_fut.set_result((kind, status, dict(hdrs) if hdrs else {}))
+            except Exception:  # noqa: BLE001
+                pass
+
     async def _capture() -> Tuple[str, bytes]:
         """Return (kind, body) where kind ∈ {'ok','error','creds','incomplete'}.
         'ok' body is a complete SSE stream (or a terminal error frame) ready to
@@ -1029,9 +1064,11 @@ async def _stream_buffered_with_retry(
                 access_token = await asyncio.to_thread(provider.get_access_token)
             except CredentialsError as e:
                 tee.error("credentials unavailable")
+                _settle("creds", 401)
                 return ("creds", str(e).encode("utf-8"))
             if access_token in tried_tokens:
                 tee.error("failover exhausted (burned slot)")
+                _settle("error", 502)
                 return ("error", b"")  # failover looped to a burned slot
 
             fwd = _build_forward_headers(headers_in, access_token)
@@ -1076,6 +1113,7 @@ async def _stream_buffered_with_retry(
                             upstream.status_code, classified.kind.name, body_preview,
                         )
                         tee.error(f"upstream HTTP {upstream.status_code}")
+                        _settle("error", upstream.status_code, upstream.headers)
                         return ("error", body)
                     # 2xx — a success means we're not capped anymore (clear phantom).
                     try:
@@ -1084,9 +1122,15 @@ async def _stream_buffered_with_retry(
                     except Exception:  # noqa: BLE001
                         pass
                     tee.attempt_started()
+                    _settle("stream", upstream.status_code, upstream.headers)
                     async for chunk in upstream.aiter_bytes():
                         buf += chunk
-                        tail = (tail + chunk)[-256:]
+                        if len(buf) > _MAX_BUFFER_BYTES:
+                            raise RuntimeError(
+                                f"upstream response exceeded {_MAX_BUFFER_BYTES} bytes")
+                        # Keep enough tail that a marker followed by a large
+                        # final chunk is still seen (256 B used to miss it).
+                        tail = (tail + chunk)[-8192:]
                         if b"\nevent: message_stop" in tail or tail.startswith(b"event: message_stop"):
                             saw_stop = True
                         if b"\nevent: error" in tail or tail.startswith(b"event: error"):
@@ -1113,6 +1157,7 @@ async def _stream_buffered_with_retry(
                     return ("ok", bytes(buf))  # a terminal error frame is complete enough to relay
                 _LOG.error("buffered stream: still incomplete after %d retries", max_retries)
                 tee.error("upstream stream incomplete after retries")
+                _settle("incomplete", 502)
                 return ("incomplete", b"")
             # The partial turn the live feed saw is void — mark the retry so
             # the renderer replaces it; the next attempt re-opens the request.
@@ -1120,8 +1165,9 @@ async def _stream_buffered_with_retry(
             await asyncio.sleep(min(2 ** attempt, max_wait))
             _LOG.info("buffered stream: re-issuing upstream (attempt %d/%d)", attempt, max_retries)
 
+    task = asyncio.create_task(_capture())
+
     async def event_stream():
-        task = asyncio.create_task(_capture())
         try:
             while not task.done():
                 try:
@@ -1164,10 +1210,45 @@ async def _stream_buffered_with_retry(
             if not task.done():
                 task.cancel()
 
+    # Wait (briefly) for upstream to reveal the outcome so definitive errors
+    # reach the client with their real status and headers -- a 429 must be a
+    # 429 for anything keying on status (recovery, retry-after) to work.
+    try:
+        kind, status, hdrs = await asyncio.wait_for(
+            asyncio.shield(status_fut), timeout=_FIRST_STATUS_WAIT_SECS)
+    except asyncio.TimeoutError:
+        kind, status, hdrs = ("unknown", 200, {})
+
+    passthrough = {
+        k: v for k, v in hdrs.items()
+        if k.lower() not in STRIP_HEADERS_OUT
+        and (k.lower().startswith("anthropic-ratelimit-")
+             or k.lower() in ("retry-after", "request-id", "x-request-id"))
+    }
+    passthrough["X-WCB-Bridge-Mode"] = "buffer-and-retry"
+
+    if kind in ("error", "creds", "incomplete"):
+        _kind, body = await task
+        if _kind == "creds":
+            return JSONResponse(
+                {"type": "error", "error": {"type": "authentication_error",
+                                             "message": body.decode("utf-8", "replace")
+                                             or "credentials unavailable"}},
+                status_code=401, headers=passthrough)
+        if _kind == "incomplete" or not body:
+            return JSONResponse(
+                {"type": "error", "error": {"type": "api_error",
+                                             "message": "wcb-bridge: upstream stream incomplete after retries"
+                                             if _kind == "incomplete" else "wcb-bridge: upstream error (buffered)"}},
+                status_code=502, headers=passthrough)
+        classified = classify_anthropic_error(status, body, hdrs)
+        return _build_error_response(classified, hdrs)
+
     return StreamingResponse(
         event_stream(),
+        status_code=200,
         media_type="text/event-stream",
-        headers={"X-WCB-Bridge-Mode": "buffer-and-retry"},
+        headers=passthrough,
     )
 
 
@@ -1221,6 +1302,10 @@ def build_app(provider: ProviderLike | None = None) -> FastAPI:
         # but M1: don't leak the token prefix / account state to unauthenticated
         # callers when a secret is configured — redact instead of 401.
         _auth = _authorized(request)
+        if not _auth:
+            # Unauthenticated liveness must not touch credentials: fetching a
+            # token here would let any caller drive refresh-token rotation.
+            return JSONResponse({"ok": True, "auth": False})
         try:
             # B11: get_access_token can block (Keychain subprocess / refresh /
             # flock); run it off the loop so /healthz can't stall and trigger a
@@ -1354,4 +1439,10 @@ def build_app(provider: ProviderLike | None = None) -> FastAPI:
     return app
 
 
-app = build_app()
+def __getattr__(name: str):
+    # ``claude_oauth.bridge:app`` for `uvicorn` users, built lazily so that
+    # merely importing this module does not construct a second FastAPI app
+    # and credential provider (PEP 562).
+    if name == "app":
+        return build_app()
+    raise AttributeError(name)

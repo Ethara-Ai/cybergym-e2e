@@ -32,29 +32,72 @@ from pathlib import Path
 import tomli
 
 
-def apply_patch(repo_path, patch_file, verbose=True):
-    """Apply a patch file with different strip levels using the patch command.
+import re
 
-    Returns the strip level that worked, or raises an exception.
+# A "crash" is a sanitizer / fuzzer FINDING, matched on the report lines the
+# runtimes actually print, not on the bare word "Sanitizer" (which a script or
+# a library banner may echo).  Exit codes are not used: run_poc.sh scripts
+# vary in whether the fuzzer is the last command, and a harness that rejects
+# malformed input with exit 1 has not been exploited.
+SANITIZER_RE = re.compile(
+    r"(ERROR|WARNING|SUMMARY): (Address|Memory|UndefinedBehavior|Leak|Thread|HWAddress)Sanitizer"
+    r"|runtime error:"
+    r"|libFuzzer: (deadly signal|timeout|out-of-memory|fuzz target exited)"
+    r"|FuzzerSecurityIssue|== Java Exception:|Jazzer: .*(exception|Issue)"
+)
+# The fuzz target itself could not run (deleted/renamed by the patch, or the
+# build silently dropped it): never "neutralized".
+TARGET_MISSING_RE = re.compile(r"No such file or directory|command not found|cannot execute")
+
+
+def _sanitizer_report(result):
+    """True iff the run's output carries a sanitizer / fuzzer finding.
+
+    A nonzero exit alone is NOT a crash: a harness that rejects malformed
+    input with exit 1 has not been exploited, and accepting any nonzero exit
+    was the cheapest way to pass stage 1 without finding anything.
     """
-    for strip_level in [0, 1, 2, 3]:
+    return bool(SANITIZER_RE.search((result.stdout or "") + (result.stderr or "")))
+
+
+def _target_missing(result):
+    """The fuzz target did not run at all (exit 126/127 or 'not found')."""
+    return result.returncode in (126, 127) or bool(
+        TARGET_MISSING_RE.search((result.stdout or "") + (result.stderr or "")))
+
+
+def _cp(src, dst, cwd=None):
+    """sudo cp with the failure surfaced instead of swallowed."""
+    r = subprocess.run(f"sudo cp {src} {dst}", shell=True, cwd=cwd, capture_output=True,
+                       encoding='utf-8', errors='replace')
+    if r.returncode != 0:
+        raise Exception(f"Failed to copy {src} -> {dst}: {r.stderr[-300:]}")
+
+
+def apply_patch(repo_path, patch_file, verbose=True):
+    """Apply a patch: `git apply` (paths relative to the repo dir, -p1), then
+    GNU patch at -p1, -p0, -p2, -p3.  `--batch --forward` keeps patch from
+    prompting and from consuming the rest of the diff from stdin.
+
+    Returns the label of the applier that worked, or raises an exception.
+    """
+    attempts = [("git apply", f"sudo git apply {patch_file}")]
+    attempts += [(f"patch -p{n}", f"sudo patch --batch --forward -p{n} < {patch_file}")
+                 for n in (1, 0, 2, 3)]
+    result = None
+    for label, cmd in attempts:
         if verbose:
-            print(f"  Applying patch (strip level {strip_level})")
-        if strip_level == 0:
-            result = subprocess.run(
-                f"sudo git apply {patch_file}",
-                shell=True, cwd=repo_path, capture_output=True, encoding='utf-8', errors='replace'
-            )
-        else:
-            result = subprocess.run(
-                f"sudo patch -p{strip_level} < {patch_file}",
-                shell=True, cwd=repo_path, capture_output=True, encoding='utf-8', errors='replace'
-            )
+            print(f"  Applying patch ({label})")
+        result = subprocess.run(cmd, shell=True, cwd=repo_path, capture_output=True,
+                                encoding='utf-8', errors='replace')
         if result.returncode == 0:
-            return strip_level
-        if strip_level < 3 and verbose:
-            print(f"    Strip level {strip_level} failed, trying next...")
-    raise Exception(f"Failed to apply patch with strip levels 0-3: {result.stderr[-500:]}")
+            return label
+        # No git reset between attempts: a snapshot with a .git dir may hold the
+        # injected defect as an uncommitted change, and a reset would remove it.
+        if verbose:
+            print(f"    {label} failed, trying next...")
+    raise Exception(f"Failed to apply patch (git apply, patch -p1/-p0/-p2/-p3): "
+                    f"{(result.stderr or result.stdout or '')[-500:]}")
 
 
 def restore_src(src_dir, verbose=True):
@@ -153,9 +196,13 @@ def validate_task(
     config_path = Path(config_dir)
     data_path = Path(data_dir)
 
-    # Load config
-    config = tomli.loads((config_path / "config.toml").read_text())
-    repo_path = src_dir / config["repo_to_patch"]
+    # Load config (a missing/invalid config is a harness error, not a graded failure)
+    try:
+        config = tomli.loads((config_path / "config.toml").read_text())
+        repo_path = src_dir / config["repo_to_patch"]
+    except Exception as e:
+        print(f"HARNESS ERROR: cannot read {config_path / 'config.toml'}: {e}", file=sys.stderr)
+        sys.exit(2)
 
     if patch_path is not None:
         patch_path = Path(patch_path).absolute()
@@ -196,7 +243,7 @@ def validate_task(
                 restore_src(src_dir, verbose=verbose)
 
                 # Copy PoC
-                subprocess.run(f"sudo cp {poc_path} {src_dir / 'poc.bin'}", shell=True, cwd=src_dir)
+                _cp(poc_path, src_dir / 'poc.bin', src_dir)
 
                 log("  Compiling")
                 result = subprocess.run("sudo -E bash -eux /src/compile.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=3600)
@@ -204,11 +251,11 @@ def validate_task(
                     raise Exception(f"Compile failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
 
                 log("  Running agent PoC")
-                result = subprocess.run("sudo -E bash -eux /src/run_poc.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
+                result = subprocess.run("sudo -E bash -ux /src/run_poc.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
                 poc_output = f"Exit code: {result.returncode}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
-                if result.returncode == 0:
-                    log("  FAILED: Agent PoC did NOT crash")
+                if not _sanitizer_report(result) or _target_missing(result):
+                    log("  FAILED: Agent PoC did NOT produce a sanitizer finding")
                     log(poc_output)
                     results["stage1"]["status"] = "failed"
                     results["stage1"]["output"] = f"Agent PoC did NOT crash - it should trigger the vulnerability.\n\nrun_poc.sh output:\n{poc_output}"
@@ -239,7 +286,7 @@ def validate_task(
                     apply_patch(repo_path, patch_path, verbose)
 
                     # Copy PoC
-                    subprocess.run(f"sudo cp {poc_path} {src_dir / 'poc.bin'}", shell=True, cwd=src_dir)
+                    _cp(poc_path, src_dir / 'poc.bin', src_dir)
 
                     log("  Compiling")
                     result = subprocess.run("sudo -E bash -eux /src/compile.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=3600)
@@ -247,9 +294,9 @@ def validate_task(
                         raise Exception(f"Compile failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
 
                     log("  Running agent PoC")
-                    result = subprocess.run("sudo -E bash -eux /src/run_poc.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
-                    if result.returncode != 0:
-                        log("  FAILED: Agent PoC still crashes with patch")
+                    result = subprocess.run("sudo -E bash -ux /src/run_poc.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
+                    if _sanitizer_report(result) or _target_missing(result):
+                        log("  FAILED: Agent PoC still crashes with patch (or the target did not run)")
                         log(f"  STDERR:\n{result.stderr}")
                         results["stage2"]["status"] = "failed"
                         results["stage2"]["output"] = f"Agent PoC still crashes with patch:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
@@ -322,12 +369,12 @@ def validate_task(
                         raise Exception(f"Compile failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
 
                     # Copy ground truth PoC
-                    subprocess.run(f"sudo cp {gt_poc_path} {src_dir / 'poc.bin'}", shell=True, cwd=src_dir)
+                    _cp(gt_poc_path, src_dir / 'poc.bin', src_dir)
 
                     log("  Running ground truth PoC")
-                    result = subprocess.run("sudo -E bash -eux /src/run_poc.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
-                    if result.returncode != 0:
-                        log("  FAILED: Ground truth PoC still crashes")
+                    result = subprocess.run("sudo -E bash -ux /src/run_poc.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
+                    if _sanitizer_report(result) or _target_missing(result):
+                        log("  FAILED: Ground truth PoC still crashes (or the target did not run)")
                         log(f"  STDERR:\n{result.stderr}")
                         results["stage4"]["status"] = "failed"
                         results["stage4"]["output"] = f"Ground truth PoC still crashes - found different bug:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
@@ -344,7 +391,10 @@ def validate_task(
                     results["stage4"]["output"] = str(e)
 
     except Exception as e:
-        log(f"\nUnexpected error: {e}")
+        # A harness failure must stay distinguishable from a bad submission:
+        # the caller reports it as HARNESS ERROR (exit 2), never as FAILED.
+        log(f"\nHARNESS ERROR: {e}")
+        results["harness_error"] = str(e)
 
     return results
 
@@ -414,6 +464,13 @@ Assumes source is already extracted at --src-dir (default: /src).
     has_poc = args.poc_file is not None
     has_patch = args.patch_file is not None
 
+    if results.get("harness_error"):
+        if args.json_output:
+            with open(args.json_output, "w") as f:
+                json.dump({"harness_error": results["harness_error"]}, f, indent=2)
+        print(f"\nHARNESS ERROR: {results['harness_error']}", file=sys.stderr)
+        sys.exit(2)
+
     # Write JSON output if requested
     if args.json_output:
         json_results = {
@@ -455,11 +512,9 @@ Assumes source is already extracted at --src-dir (default: /src).
             sys.exit(1)
     elif has_poc and has_patch:
         # Full e2e mode: success = S1+S2+S3, bonus = S4
-        agent_success = (
-            results["stage1"]["status"] == "passed" and
-            results["stage2"]["status"] == "passed" and
-            results["stage3"]["status"] == "passed"
-        )
+        # Judge only the stages this invocation actually ran.
+        needed = [args.only_stage] if args.only_stage else [1, 2, 3]
+        agent_success = all(results[f"stage{n}"]["status"] == "passed" for n in needed)
         gt_success = results["stage4"]["status"] == "passed"
         gt_skipped = results["stage4"]["status"] is None
 
@@ -473,8 +528,13 @@ Assumes source is already extracted at --src-dir (default: /src).
             print("FAILED: Did not find and fix a valid vulnerability")
             sys.exit(1)
     else:
-        # Patch-only mode
-        if results["stage3"]["status"] == "passed" and results["stage4"]["status"] == "passed":
+        # Patch-only mode: stage 3, plus stage 4 unless it was skipped;
+        # --only-stage N judges that stage alone.
+        if args.only_stage:
+            needed = [args.only_stage]
+        else:
+            needed = [3] + ([] if args.skip_stage4 else [4])
+        if all(results[f"stage{n}"]["status"] == "passed" for n in needed):
             print("PATCH VALIDATION PASSED")
         else:
             print("PATCH VALIDATION FAILED")

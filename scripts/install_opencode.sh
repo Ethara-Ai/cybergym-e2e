@@ -13,6 +13,6 @@ source "$HOME/.nvm/nvm.sh"
 nvm install 22
 npm -v
 
-npm install -g opencode-ai
+npm install -g opencode-ai@1.18.26
 
 mkdir -p "$HOME/.config/opencode"

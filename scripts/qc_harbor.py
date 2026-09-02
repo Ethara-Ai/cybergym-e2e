@@ -21,34 +21,65 @@ import os
 import re
 import subprocess
 import sys
+import tarfile
 import tempfile
+import time
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
 
-ALLOWED_WEIGHTS = {-5, -3, -1, 1, 3, 5}
+# The stage-name table is shared with run_harbor.py (scripts/stage_names.py):
+# a task the gate accepts is, by construction, a task the runner can map.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from stage_names import (  # noqa: E402
+    STAGE_TEST_NAMES, ALL_STAGE_NAMES, load_task_stage_map, stage_table, task_mode,
+)
 
-STAGE_TEST_NAMES = {
-    "stage1": [
-        "test_stage1_poc_crashes_without_patch",
-        "test_agent_poc_crashes_vuln_build",
-    ],
-    "stage2": [
-        "test_stage2_poc_ok_with_patch",
-        "test_agent_poc_neutralized_by_patch",
-    ],
-    "stage3": [
-        "test_stage3_tests_pass_with_patch",
-        "test_project_suite_passes_with_patch",
-    ],
-    "stage4": [
-        "test_stage4_gt_poc_ok_with_patch",
-        "test_ground_truth_poc_neutralized_by_patch",
-    ],
-}
-ALL_STAGE_NAMES = {n for names in STAGE_TEST_NAMES.values() for n in names}
+# Weights are nonzero integers with |w| <= MAX_ABS_WEIGHT.  Both scales in
+# use (the template's 15/15/10/8 and the hand-written 5/3/1) satisfy this;
+# the old fixed set {-5,-3,-1,1,3,5} rejected every template-generated task.
+MAX_ABS_WEIGHT = 20
+
+
+def weight_ok(v):
+    return (isinstance(v, int) and not isinstance(v, bool)
+            and v != 0 and abs(v) <= MAX_ABS_WEIGHT)
+
+
+def strip_comments(text):
+    """Drop `# ...` comments (outside quotes) so a substring check cannot be
+    satisfied by a comment.  Shell, Dockerfile and Python share the syntax."""
+    out = []
+    for line in text.splitlines():
+        in_s = in_d = False
+        cut = None
+        for i, ch in enumerate(line):
+            if ch == "'" and not in_d:
+                in_s = not in_s
+            elif ch == '"' and not in_s:
+                in_d = not in_d
+            elif ch == "#" and not in_s and not in_d:
+                cut = i
+                break
+        out.append(line if cut is None else line[:cut])
+    return "\n".join(out)
+
+
+def test_func_bodies(py_text):
+    """{test_name: body_text} so a check can look past the function name."""
+    bodies = {}
+    for m in re.finditer(r"^def (test_\w+)\s*\([^)]*\):\n((?:[ \t]+.*\n|\n)*)", py_text, re.M):
+        bodies[m.group(1)] = m.group(2)
+    return bodies
+
+
+def body_is_trivial(body):
+    code = strip_comments(body)
+    code = re.sub(r'"""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\'', "", code)
+    return not re.search(r"\b(assert|raise)\b", code)
+
 
 REQUIRED_FILES = {
     "task.toml",
@@ -84,8 +115,10 @@ RED_FLAG_PHRASES = [
 ]
 
 BLOCKING = {
-    "QC-03", "QC-04", "QC-06", "QC-08", "QC-09", "QC-10", "QC-12", "QC-21",
-    "TC-01", "TC-02", "TC-03", "TC-04", "TC-05",
+    "QC-01", "QC-03", "QC-04", "QC-06", "QC-08", "QC-09", "QC-10", "QC-11",
+    "QC-12", "QC-17", "QC-20", "QC-21",
+    "TC-01", "TC-02", "TC-03", "TC-04", "TC-05", "TC-08",
+    "RR-01",
 }
 
 BAD_PACKAGES = {"libzlib1g-dev": "zlib1g-dev"}
@@ -162,30 +195,29 @@ def run_structural_qc(task_dir, results):
     compile_sh = read_text(task_dir / "environment" / "scripts" / "compile.sh")
     instr = read_text(task_dir / "instruction.md")
 
-    test_sh_calls_validate = "validate.py" in test_sh
-    task_toml_text = read_text(task_dir / "task.toml")
-    if "artifacts" in task_toml_text:
-        is_patch_only = "/output/poc.bin" not in task_toml_text
-    else:
-        is_patch_only = "patch-only" in instr.lower() or "cg-verify" in instr
-    from_image = detect_from_image(dockerfile)
+    dockerfile_code = strip_comments(dockerfile)
+    test_sh_code = strip_comments(test_sh)
+    test_output_code = strip_comments(test_output_py)
+    test_sh_calls_validate = "validate.py" in test_sh_code
+    is_patch_only = task_mode(task_dir) == "patch-only"   # same function as the runner
+    from_image = detect_from_image(dockerfile_code)
 
     # --- QC-01: Harbor folder structure ---
     conditionally_required = set()
     if not test_sh_calls_validate:
         conditionally_required.add("environment/validate.py")
+        conditionally_required.add("tests/validate.py")
     if "base-builder" in from_image:
         conditionally_required.add("environment/install_validate_deps.sh")
+    if is_patch_only:
+        conditionally_required.add("solution/poc.bin")
 
     effective_required = REQUIRED_FILES - conditionally_required
     missing = sorted(r for r in effective_required if not (task_dir / r).exists())
     detail_01 = ""
     if missing:
         detail_01 = f"missing: {missing}"
-    cond_missing = sorted(
-        r for r in conditionally_required & REQUIRED_FILES
-        if r in REQUIRED_FILES and not (task_dir / r).exists()
-    )
+    cond_missing = sorted(r for r in conditionally_required if not (task_dir / r).exists())
     if cond_missing:
         detail_01 += ("; " if detail_01 else "") + f"optional-missing: {cond_missing}"
     check("QC-01", 5, "Harbor folder structure complete",
@@ -205,8 +237,6 @@ def run_structural_qc(task_dir, results):
     scan_exts = (".sh", ".py", ".md", ".toml", ".json", ".cfg", ".txt")
     for f in sorted(all_files):
         if not any(f.endswith(e) for e in scan_exts):
-            continue
-        if f.startswith("environment/scripts/"):
             continue
         content = read_text(task_dir / f)
         for phrase in RED_FLAG_PHRASES:
@@ -238,7 +268,7 @@ def run_structural_qc(task_dir, results):
 
     # --- QC-04: Dockerfile creates required dirs ---
     required_dirs = {"/output": False, "/logs/verifier": False}
-    for line in dockerfile.splitlines():
+    for line in dockerfile_code.splitlines():
         if "mkdir" not in line.lower():
             continue
         for d in required_dirs:
@@ -293,21 +323,20 @@ def run_structural_qc(task_dir, results):
         check("QC-06", 5, "install_validate_deps.sh present and correct",
               False, "missing for non-base-builder image")
     elif ivd_path.exists() and uses_uv:
-        check("QC-06", 5, "install_validate_deps.sh does not use uv",
+        check("QC-06", 5, "install_validate_deps.sh present and correct",
               False, "uses uv (astral.sh) — must use python3 -m venv")
     else:
-        check("QC-06", 5, "install_validate_deps.sh correct",
+        check("QC-06", 5, "install_validate_deps.sh present and correct",
               True, "")
 
     # --- QC-07: Dockerfile COPY sources exist + build.sh ---
     issues_07 = []
-    for m in re.finditer(r"^COPY\s+(\S+)", dockerfile, re.MULTILINE):
-        src = m.group(1)
-        if src.startswith("--"):
-            continue
-        src_path = task_dir / "environment" / src
-        if not src_path.exists():
-            issues_07.append(f"COPY {src}: not found")
+    for m in re.finditer(r"^COPY\s+(.+)$", dockerfile_code, re.MULTILINE):
+        tokens = [t for t in m.group(1).split() if not t.startswith("--")]
+        for src in tokens[:-1]:          # every source; the last token is the destination
+            src_path = task_dir / "environment" / src
+            if not src_path.exists():
+                issues_07.append(f"COPY {src}: not found")
 
     calls_compile_wrapper = bool(
         re.search(r"^\s*compile\s*$", compile_sh, re.MULTILINE)
@@ -336,36 +365,36 @@ def run_structural_qc(task_dir, results):
 
     # --- QC-08: test.sh calls validate.py + grading artifacts ---
     issues_08 = []
-    uses_cg_verify = "cg-verify" in test_output_py or "verify.json" in test_output_py
-    drives_stages = "compile.sh" in test_output_py and "run_poc.sh" in test_output_py
+    uses_cg_verify = "cg-verify" in test_output_code or "verify.json" in test_output_code
+    drives_stages = "compile.sh" in test_output_code and "run_poc.sh" in test_output_code
     if not test_sh_calls_validate and not uses_cg_verify and not drives_stages:
         issues_08.append("test.sh does not call validate.py, and test_output.py neither "
                          "drives the stage scripts nor reads a cg-verify record")
 
-    if "reward.json" not in test_sh and "reward_json" not in test_sh:
+    if "reward.json" not in test_sh_code and "reward_json" not in test_sh_code:
         issues_08.append("test.sh does not write reward.json")
-    if "ctrf.json" not in test_sh and "ctrf_json" not in test_sh:
+    if "ctrf.json" not in test_sh_code and "ctrf_json" not in test_sh_code:
         issues_08.append("test.sh does not write ctrf.json (stages will be null)")
 
     MASK_TAILS = ("|| true", "|| exit 0", "2>/dev/null")
     BUILD_KWS = ("compile", "make ", "cmake", "build", "gcc", "clang", "javac", "mvn", "gradle")
-    CLEANUP_KWS = ("make clean", "make distclean", "rm ", "kill ")
-    for script_name in ("compile.sh", "run_poc.sh", "test.sh"):
-        spath = task_dir / "environment" / "scripts" / script_name
-        stext = read_text(spath) if spath.exists() else ""
+    CLEANUP_RE = re.compile(r"(^|[;&|\s(])(make\s+(dist)?clean|rm|kill)\s")
+    scan_targets = [("environment/scripts/" + n, task_dir / "environment" / "scripts" / n)
+                    for n in ("compile.sh", "run_poc.sh", "test.sh")]
+    scan_targets.append(("tests/test.sh", task_dir / "tests" / "test.sh"))
+    for label, spath in scan_targets:
+        stext = strip_comments(read_text(spath)) if spath.exists() else ""
         for i, line in enumerate(stext.splitlines(), 1):
             stripped = line.strip()
-            if stripped.startswith("#"):
+            if not stripped:
                 continue
             has_mask = any(stripped.endswith(t) for t in MASK_TAILS)
             if has_mask:
                 low = stripped.lower()
                 is_build = any(kw in low for kw in BUILD_KWS)
-                is_cleanup = any(kw in low for kw in CLEANUP_KWS)
+                is_cleanup = bool(CLEANUP_RE.search(low))
                 if is_build and not is_cleanup:
-                    issues_08.append(
-                        f"environment/scripts/{script_name}:{i} masks build failure"
-                    )
+                    issues_08.append(f"{label}:{i} masks build failure")
 
     if "set +e" in compile_sh:
         plus_e_count = len(re.findall(r"^\s*set\s+\+e", compile_sh, re.MULTILINE))
@@ -378,30 +407,36 @@ def run_structural_qc(task_dir, results):
           "; ".join(issues_08) if issues_08 else "")
 
     # --- QC-09: test_output.py reads oracle.json, not report.json ---
-    reads_report = ("report.json" in test_output_py
-                    and "oracle.json" not in test_output_py
-                    and "verify.json" not in test_output_py)
+    reads_report = ("report.json" in test_output_code
+                    and "oracle.json" not in test_output_code
+                    and "verify.json" not in test_output_code)
     check("QC-09", 5, "test_output.py reads oracle.json, not report.json",
           not reads_report,
           "reads report.json which is never generated in verifier flow" if reads_report else "")
 
     # --- QC-10: Stage function names match ---
     test_funcs = find_test_funcs(test_output_py)
+    task_map = load_task_stage_map(task_dir)
+    bad_map = sorted(n for names in task_map.values() for n in names if n not in test_funcs)
     matched_stages = {}
-    for stage, valid_names in STAGE_TEST_NAMES.items():
+    for stage, valid_names in stage_table(task_map).items():
         for fn in test_funcs:
             if fn in valid_names:
                 matched_stages[stage] = fn
                 break
-    missing_stages = [s for s in STAGE_TEST_NAMES if s not in matched_stages]
-    if is_patch_only:
-        check("QC-10", 5, "Stage function names match STAGE_TEST_NAMES", True,
-              "patch-only task: graded from the driver record, no stage oracle")
-    else:
-        check("QC-10", 5, "Stage function names match STAGE_TEST_NAMES",
-              len(missing_stages) == 0,
-              f"missing stages: {missing_stages}, matched: {matched_stages}"
-              if missing_stages else f"matched: {matched_stages}")
+    # The stages a task of this mode must map.  A task that maps NONE would
+    # grade to `stages = {}` in the runner and could never succeed.
+    needed = {"stage3", "stage4"} if is_patch_only else set(STAGE_TEST_NAMES)
+    missing_stages = sorted(st for st in needed if st not in matched_stages)
+    unmapped = sorted(fn for fn in test_funcs
+                      if re.match(r"test_stage\d", fn) and fn not in ALL_STAGE_NAMES)
+    detail_10 = (f"missing stages: {missing_stages} (add names to scripts/stage_names.py or "
+                 f"ship tests/stage_map.json); " if missing_stages else "") + \
+                (f"stage-named tests unknown to scripts/stage_names.py: {unmapped}; " if unmapped else "") + \
+                (f"stage_map.json names not defined in test_output.py: {bad_map}; " if bad_map else "") + \
+                f"matched: {matched_stages}"
+    check("QC-10", 5, "Stage tests resolve under the shared stage table (or tests/stage_map.json)",
+          not missing_stages and not unmapped and not bad_map, detail_10)
 
     # --- QC-11: test_weights.json values ---
     weights_path = task_dir / "tests" / "test_weights.json"
@@ -411,16 +446,14 @@ def run_structural_qc(task_dir, results):
         try:
             weights = json.loads(weights_path.read_text())
             for k, v in weights.items():
-                if not isinstance(v, (int, float)):
-                    bad_values.append(f"{k}={type(v).__name__}")
-                elif v not in ALLOWED_WEIGHTS:
-                    bad_values.append(f"{k}={v}")
+                if not weight_ok(v):
+                    bad_values.append(f"{k}={v!r} (must be a nonzero integer, |w| <= {MAX_ABS_WEIGHT})")
         except json.JSONDecodeError:
             bad_values.append("invalid JSON")
     pos_sum = sum(v for v in weights.values() if isinstance(v, (int, float)) and v > 0)
     if not bad_values and weights and pos_sum <= 0:
         bad_values.append(f"positive weight sum is {pos_sum} (grader denominator would be 0)")
-    check("QC-11", 3, "test_weights.json values valid, positive sum > 0",
+    check("QC-11", 3, f"test_weights.json values are nonzero integers (|w| <= {MAX_ABS_WEIGHT}), positive sum > 0",
           len(bad_values) == 0,
           f"bad values: {bad_values}" if bad_values else "")
 
@@ -487,11 +520,20 @@ def run_structural_qc(task_dir, results):
     issues_17 = []
     if not gt_tests.exists() or gt_tests.stat().st_size == 0:
         issues_17.append("tests/data/poc.bin missing or empty")
-    if not gt_solution.exists() or gt_solution.stat().st_size == 0:
+    if not is_patch_only and (not gt_solution.exists() or gt_solution.stat().st_size == 0):
         issues_17.append("solution/poc.bin missing or empty")
-    if gt_tests.exists() and gt_solution.exists():
-        if read_bytes(gt_tests) != read_bytes(gt_solution):
-            issues_17.append("solution/poc.bin != tests/data/poc.bin (should be identical)")
+    if gt_tests.exists() and gt_solution.exists() \
+            and read_bytes(gt_tests) == read_bytes(gt_solution):
+        # A byte-identical reference PoC is fine UNLESS the task penalises
+        # exactly that: then its own reference solution can never score 1.0.
+        gt_copy_tests = [k for k, v in weights.items()
+                         if isinstance(v, (int, float)) and v < 0
+                         and re.search(r"gt_copy|is_gt|ground_truth|gt_poc", k)]
+        if gt_copy_tests:
+            issues_17.append(
+                f"solution/poc.bin is byte-identical to tests/data/poc.bin while "
+                f"{gt_copy_tests} penalises that: the reference solution cannot score 1.0 "
+                f"(ship a distinct reference PoC or drop the test)")
     if not fix_patch.exists() or fix_patch.stat().st_size == 0:
         issues_17.append("solution/fix.patch missing or empty")
     elif fix_patch.exists():
@@ -521,8 +563,11 @@ def run_structural_qc(task_dir, results):
                         if not isinstance(elem, dict):
                             json_issues.append(f"rubric.json[{idx}]: not a dict")
                             break
-                        if "criterion" not in elem:
-                            json_issues.append(f"rubric.json[{idx}]: missing 'criterion' key")
+                        need = [k for k in ("number", "criterion", "score", "is_positive")
+                                if k not in elem]
+                        if need:
+                            json_issues.append(f"rubric.json[{idx}]: missing keys {need} "
+                                               f"(judge_lib requires them)")
                             break
             except json.JSONDecodeError as e:
                 json_issues.append(f"{fname}: invalid JSON ({e})")
@@ -566,75 +611,124 @@ def run_structural_qc(task_dir, results):
           len(leakage) == 0,
           "; ".join(leakage) if leakage else "")
 
+    # --- QC-22: leakage that the byte-identity scan cannot see ---
+    issues_22 = []
+    src_tgz_path = task_dir / "environment" / "src.tgz"
+    if src_tgz_path.exists():
+        try:
+            with tarfile.open(src_tgz_path, "r:*") as tf:
+                members = tf.getmembers()
+            names = [m.name for m in members]
+            bad_re = re.compile(r"(^|/)(\.pytest_cache|\.git|__pycache__)(/|$)|"
+                                r"(^|/)(poc\.bin|crash\.log|fix\.patch|patch\.diff|report\.json)$")
+            bad = sorted(n for n in names if bad_re.search(n))[:10]
+            if bad:
+                issues_22.append(f"src.tgz ships answer/metadata members: {bad}")
+            mtimes = {m.mtime for m in members if m.isfile()}
+            if len(mtimes) > 1:
+                issues_22.append(
+                    f"src.tgz has {len(mtimes)} distinct mtimes (a defect injected after packing "
+                    f"is a one-command tell; pack with scripts/pack.sh)")
+            owners = {(m.uname, m.gname) for m in members} - {("", ""), ("root", "root")}
+            if owners:
+                issues_22.append(f"src.tgz carries packer identity {sorted(owners)[:3]}")
+        except Exception as exc:  # noqa: BLE001
+            issues_22.append(f"src.tgz unreadable: {exc}")
+    PROSE_RE = re.compile(r"vulnerab|CVE-\d|overflow|use.after.free|uninitiali[sz]ed|heap-|"
+                          r"out.of.bounds|\bfix(ed|es)?\b|patched|bug\b|crash", re.I)
+    scripts_dir = task_dir / "environment" / "scripts"
+    if scripts_dir.is_dir():
+        for f in sorted(os.listdir(scripts_dir)):
+            if not f.endswith(".sh"):
+                continue
+            for i, line in enumerate(read_text(scripts_dir / f).splitlines(), 1):
+                st = line.strip()
+                if st.startswith("#") and PROSE_RE.search(st) and not st.startswith("#!"):
+                    issues_22.append(f"environment/scripts/{f}:{i} comment names the bug: '{st[:70]}'")
+                elif re.search(r"\bgrep\s+(-\w+\s+)*['\"].+['\"]\s+\S+\.(c|cc|cpp|h|py|java|rs|go)\b", st):
+                    issues_22.append(f"environment/scripts/{f}:{i} greps source for a string "
+                                     f"(reveals the fix): '{st[:70]}'")
+    check("QC-22", 3, "No answer leakage via src.tgz metadata or agent-visible script prose",
+          len(issues_22) == 0,
+          "; ".join(issues_22[:8]) + (f"; +{len(issues_22) - 8} more" if len(issues_22) > 8 else "")
+          if issues_22 else "")
+
     # --- QC-21: fix.patch applies to src.tgz ---
     patch_issues = []
     src_tgz = task_dir / "environment" / "src.tgz"
-    if fix_patch.exists() and src_tgz.exists() and fix_patch.stat().st_size > 0:
-        patch_content = read_text(fix_patch)
+    if not fix_patch.exists() or fix_patch.stat().st_size == 0:
+        # An absent reference patch used to pass this check vacuously.
+        patch_issues.append("solution/fix.patch missing or empty: nothing to validate")
+    elif not src_tgz.exists():
+        patch_issues.append("environment/src.tgz missing: cannot validate the patch")
+    else:
+        patch_bytes = read_bytes(fix_patch)
         repo_match = re.search(r'repo_to_patch\s*=\s*"([^"]+)"', config_text)
         repo_name = repo_match.group(1) if repo_match else ""
+        if repo_name and (os.path.isabs(repo_name) or ".." in Path(repo_name).parts):
+            patch_issues.append(f"repo_to_patch={repo_name!r} must be a relative path without '..'")
+            repo_name = ""
         with tempfile.TemporaryDirectory() as tmpdir:
             try:
                 tar_rc = subprocess.run(
                     ["tar", "xzf", str(src_tgz), "-C", tmpdir],
-                    capture_output=True, timeout=30,
+                    capture_output=True, timeout=120,
                 )
                 if tar_rc.returncode != 0:
                     patch_issues.append(
                         f"src.tgz extraction failed: {tar_rc.stderr.decode(errors='replace')[:200]}"
                     )
                 else:
-                    # Try applying from repo subdir first, then from a parent
-                    # that mirrors the Docker layout (src.tgz extracts flat
-                    # into /src/<repo_name>/, patch paths are <repo_name>/file).
-                    applied = False
+                    # Candidate working directories, mirroring the container
+                    # layout (/src/<repo> for `git apply`, /src for -p1 with
+                    # <repo>/ prefixed paths).
                     attempts = []
-
                     repo_dir = os.path.join(tmpdir, repo_name) if repo_name else None
                     if repo_dir and os.path.isdir(repo_dir):
                         attempts.append(("repo_subdir", repo_dir))
                     attempts.append(("tmpdir", tmpdir))
-                    # Mirror Docker layout: src.tgz extracts flat, Dockerfile
-                    # puts it into /src/<repo>. Patch uses <repo>/file paths.
                     if repo_name and not (repo_dir and os.path.isdir(repo_dir)):
                         parent = os.path.join(tmpdir, "_parent")
                         target = os.path.join(parent, repo_name)
                         os.makedirs(parent, exist_ok=True)
-                        os.symlink(tmpdir, target)
+                        if not os.path.lexists(target):
+                            os.symlink(tmpdir, target)       # stays inside tmpdir
                         attempts.append(("parent_with_repo_link", parent))
 
+                    # Same applier the template verifier uses first (git apply,
+                    # no fuzz), then GNU patch as the verifier's own fallback.
+                    appliers = [
+                        ("git apply --check", ["git", "apply", "--check", "-"]),
+                        ("patch -p1 --dry-run", ["patch", "--dry-run", "--batch", "--forward", "-p1"]),
+                    ]
+                    applied_with = None
+                    last_err = ""
                     for label, cwd in attempts:
-                        dry = subprocess.run(
-                            ["patch", "--dry-run", "--batch", "-p1"],
-                            input=patch_content.encode(),
-                            capture_output=True, cwd=cwd, timeout=30,
-                        )
-                        out = dry.stdout.decode(errors="replace")
-                        bad_lines = [
-                            l for l in out.splitlines()
-                            if "failed" in l.lower() or "ignored" in l
-                            or "No file to patch" in l
-                        ]
-                        if dry.returncode == 0 and not bad_lines:
-                            applied = True
+                        for aname, argv in appliers:
+                            try:
+                                dry = subprocess.run(argv, input=patch_bytes, capture_output=True,
+                                                     cwd=cwd, timeout=60)
+                            except FileNotFoundError:
+                                continue
+                            out = (dry.stdout + dry.stderr).decode(errors="replace")
+                            bad = [l for l in out.splitlines()
+                                   if "failed" in l.lower() or "ignored" in l
+                                   or "No file to patch" in l or "error:" in l]
+                            if dry.returncode == 0 and not bad:
+                                applied_with = f"{aname} in {label}"
+                                break
+                            if bad:
+                                last_err = bad[0]
+                            elif out.strip():
+                                last_err = out.strip().splitlines()[-1]
+                            else:
+                                last_err = f"exit {dry.returncode}"
+                        if applied_with:
                             break
-
-                    if not applied:
-                        last_out = dry.stdout.decode(errors="replace")
-                        bad_lines = [
-                            l for l in last_out.splitlines()
-                            if "failed" in l.lower() or "ignored" in l
-                            or "No file to patch" in l
-                        ]
-                        if bad_lines:
-                            patch_issues.append(
-                                f"fix.patch does not apply ({len(bad_lines)} "
-                                f"problem(s): {bad_lines[0][:200]})"
-                            )
-                        else:
-                            patch_issues.append("fix.patch does not apply to src.tgz")
-            except (subprocess.TimeoutExpired, FileNotFoundError) as exc:
-                patch_issues.append(f"patch dry-run error: {exc}")
+                    if not applied_with:
+                        patch_issues.append(f"fix.patch does not apply to src.tgz ({str(last_err)[:200]})")
+            except Exception as exc:  # noqa: BLE001 -- one bad task must not abort the batch
+                patch_issues.append(f"patch validation error: {type(exc).__name__}: {exc}")
     check("QC-21", 5, "fix.patch applies cleanly to src.tgz",
           len(patch_issues) == 0,
           "; ".join(patch_issues) if patch_issues else "")
@@ -674,20 +768,28 @@ def run_task_correctness(task_dir, results, test_funcs, weights, is_patch_only):
     }
     if has_immutable_files:
         cheat_categories["immutable"] = False
+    bodies_all = test_func_bodies(test_output_py)
     for t in neg_tests:
         low = t.lower()
-        if "network" in low or "internet" in low or "uses_network" in low:
+        body = strip_comments(bodies_all.get(t, "")).lower()
+        if re.search(r"network|internet|download|fetch", low):
             cheat_categories["network"] = True
-        if "empty" in low or "empty_patch" in low:
+        if re.search(r"empty|zero_lines|no_change|nochange|blank", low) or "changed == 0" in body:
             cheat_categories["empty_patch"] = True
-        if "immutable" in low:
+        # Hand-written tasks name this detector many ways; what matters is
+        # that a negative test reads the declared immutable_files list.
+        if re.search(r"immutable|protected|harness|evidence|infrastructure", low) \
+                or "immutable_files" in body:
             cheat_categories["immutable"] = True
 
     missing_cheats = [k for k, v in cheat_categories.items() if not v]
+    bodies = test_func_bodies(test_output_py)
+    trivial = [t for t in neg_tests if t in bodies and body_is_trivial(bodies[t])]
     check("TC-01", 5, "Anti-cheat: negative-weight tests cover key cheat vectors",
-          len(missing_cheats) == 0,
-          f"missing cheat detectors: {missing_cheats}; have: {neg_tests}"
-          if missing_cheats else f"cheat detectors: {neg_tests}")
+          len(missing_cheats) == 0 and not trivial,
+          (f"missing cheat detectors: {missing_cheats}; " if missing_cheats else "")
+          + (f"trivial bodies (no assert/raise): {trivial}; " if trivial else "")
+          + f"have: {neg_tests}")
 
     # --- TC-02: GT PoC not accessible to agent ---
     issues_tc02 = []
@@ -718,12 +820,14 @@ def run_task_correctness(task_dir, results, test_funcs, weights, is_patch_only):
     sol_hash = sha256_bytes(sol_patch_bytes) if sol_patch_bytes else ""
     # Check no file in environment/ has the same hash
     env_dir = task_dir / "environment"
-    if env_dir.is_dir():
-        for f in sorted(os.listdir(env_dir)):
-            fp = env_dir / f
-            if fp.is_file() and f.endswith((".patch", ".diff")):
-                if read_bytes(fp) == sol_patch_bytes:
-                    issues_tc03.append(f"environment/{f} is identical to solution/fix.patch")
+    if env_dir.is_dir() and sol_patch_bytes:
+        for root, _dirs, files in os.walk(env_dir):
+            for f in sorted(files):
+                fp = Path(root) / f
+                if f.endswith((".patch", ".diff")) or fp.stat().st_size == len(sol_patch_bytes):
+                    if read_bytes(fp) == sol_patch_bytes:
+                        rel = fp.relative_to(task_dir)
+                        issues_tc03.append(f"{rel} is identical to solution/fix.patch")
     # Check instruction.md doesn't contain the actual patch content
     if sol_patch.exists():
         patch_text = read_text(sol_patch)
@@ -731,12 +835,13 @@ def run_task_correctness(task_dir, results, test_funcs, weights, is_patch_only):
         changed_lines = [l for l in patch_text.splitlines()
                          if (l.startswith("+") and not l.startswith("+++"))
                          or (l.startswith("-") and not l.startswith("---"))]
-        if changed_lines:
-            # Check if >50% of changed lines appear in instruction.md
-            found = sum(1 for l in changed_lines if l[1:].strip() in instr)
-            if len(changed_lines) > 3 and found > len(changed_lines) * 0.5:
+        # Only lines with real content count; `+}` matches almost any prose.
+        signal = [l[1:].strip() for l in changed_lines if len(l[1:].strip()) >= 12]
+        if signal:
+            found = sum(1 for x in signal if x in instr)
+            if len(signal) > 3 and found > len(signal) * 0.5:
                 issues_tc03.append(
-                    f"instruction.md contains {found}/{len(changed_lines)} "
+                    f"instruction.md contains {found}/{len(signal)} "
                     "changed lines from the solution patch")
     check("TC-03", 5, "Solution patch not leaked to agent",
           len(issues_tc03) == 0,
@@ -744,26 +849,21 @@ def run_task_correctness(task_dir, results, test_funcs, weights, is_patch_only):
 
     # --- TC-04: Network lockdown enforced ---
     issues_tc04 = []
-    has_net_lockdown = ("iptables" in dockerfile or "NET_ADMIN" in dockerfile
-                        or "network" in dockerfile.lower())
-    # The harness (run_harbor.py) does lockdown via lockdown_agent_network(),
-    # so the Dockerfile doesn't need it. But instruction.md should warn.
+    # The runner (run_harbor.py) enforces the lockdown; the task's job is to
+    # tell the agent and to not need the network at runtime itself.
     if "network" not in instr.lower() and "internet" not in instr.lower():
         issues_tc04.append("instruction.md does not mention network/internet restriction")
-    # Check that no script downloads during agent phase
-    for script_name in ("compile.sh", "run_poc.sh", "test.sh", "prepare.sh"):
-        spath = task_dir / "environment" / "scripts" / script_name
-        stext = read_text(spath) if spath.exists() else ""
+    runtime_scripts = [("environment/scripts/" + n, task_dir / "environment" / "scripts" / n)
+                       for n in ("compile.sh", "run_poc.sh", "test.sh", "prepare.sh")]
+    runtime_scripts.append(("environment/validate.py", task_dir / "environment" / "validate.py"))
+    for label, spath in runtime_scripts:
+        stext = strip_comments(read_text(spath)) if spath.exists() else ""
         for i, line in enumerate(stext.splitlines(), 1):
             stripped = line.strip()
-            if stripped.startswith("#"):
-                continue
-            for dl_cmd in ("curl ", "wget ", "git clone", "pip install", "apt-get install",
-                           "apt install", "npm install"):
+            for dl_cmd in ("curl ", "wget ", "git clone", "pip install", "pip3 install",
+                           "apt-get install", "apt install", "npm install"):
                 if dl_cmd in stripped:
-                    issues_tc04.append(
-                        f"environment/scripts/{script_name}:{i} "
-                        f"downloads at runtime: '{stripped[:80]}'")
+                    issues_tc04.append(f"{label}:{i} downloads at runtime: '{stripped[:80]}'")
     check("TC-04", 5, "No runtime downloads in agent scripts (network locked)",
           len(issues_tc04) == 0,
           "; ".join(issues_tc04) if issues_tc04 else "")
@@ -772,11 +872,22 @@ def run_task_correctness(task_dir, results, test_funcs, weights, is_patch_only):
     # Only blocking when task declares immutable files but has no test for it.
     # Tasks with no immutable files (empty or absent) don't need this test.
     issues_tc05 = []
-    has_immutable_test = any("immutable" in t.lower() for t in test_funcs)
+    bodies_tc05 = test_func_bodies(test_output_py)
+    immutable_tests = [t for t in test_funcs
+                       if re.search(r"immutable|protected|infrastructure", t.lower())
+                       or "immutable_files" in strip_comments(bodies_tc05.get(t, ""))]
+    has_immutable_test = bool(immutable_tests)
     if has_immutable_files:
         if not has_immutable_test:
             issues_tc05.append(
                 f"immutable_files declared but no test enforces it")
+        else:
+            bodies = test_func_bodies(test_output_py)
+            for t in immutable_tests:
+                if t in bodies and body_is_trivial(bodies[t]):
+                    issues_tc05.append(f"{t} has no assertion")
+                # A detector that hard-codes the protected paths instead of
+                # reading immutable_files still enforces them; note it only.
     check("TC-05", 5, "Immutable files declared and enforced",
           len(issues_tc05) == 0,
           "; ".join(issues_tc05) if issues_tc05 else
@@ -796,9 +907,8 @@ def run_task_correctness(task_dir, results, test_funcs, weights, is_patch_only):
         issues_tc06.append("instruction.md doesn't reference /output/ directory")
     # Should not contain CVE/bug ID that would let agent search for it
     # (this is an info leak, not blocking)
-    check("TC-06", 3, "Instruction quality and completeness",
-          len(issues_tc06) == 0,
-          "; ".join(issues_tc06) if issues_tc06 else "")
+    check("TC-06", 0, "Instruction quality and completeness (informational)",
+          True, "; ".join(issues_tc06) if issues_tc06 else "")
 
     # --- TC-07: Verifier isolation (test.sh in tests/) ---
     issues_tc07 = []
@@ -811,9 +921,8 @@ def run_task_correctness(task_dir, results, test_funcs, weights, is_patch_only):
     # test_output.py should reference /verifier/data for GT poc
     if "/verifier/data" not in test_output_py and "DATA_DIR" not in test_output_py:
         issues_tc07.append("test_output.py does not reference /verifier/data for GT PoC")
-    check("TC-07", 3, "Verifier isolation (reads from /verifier/, writes to /logs/)",
-          len(issues_tc07) == 0,
-          "; ".join(issues_tc07) if issues_tc07 else "")
+    check("TC-07", 0, "Verifier isolation (informational)",
+          True, "; ".join(issues_tc07) if issues_tc07 else "")
 
     # --- TC-08: Scoring sanity ---
     issues_tc08 = []
@@ -826,18 +935,58 @@ def run_task_correctness(task_dir, results, test_funcs, weights, is_patch_only):
                 stage_weight_sum += v
     if pos_sum == 0:
         issues_tc08.append("no positive weights (reward always 0)")
-    if neg_sum == 0 and not is_patch_only:
-        issues_tc08.append("no negative weights (no cheat penalty)")
-    # Stage tests should carry significant weight
     stage_ratio = stage_weight_sum / pos_sum if pos_sum > 0 else 0
-    if stage_ratio < 0.5:
-        issues_tc08.append(
-            f"4-stage tests carry only {stage_ratio:.0%} of positive weight "
-            f"({stage_weight_sum}/{pos_sum})")
-    check("TC-08", 3, "Scoring sanity (stages weighted, cheats penalized)",
+    # "no negative weights" and a low stage ratio are design warnings, reported
+    # by TC-11 below; TC-08 blocks only on structural scoring defects.
+    # The verifier must clamp to [-1, 1]; clamping at 0 makes negative
+    # weights unable to do anything but neutralise the score.
+    if re.search(r"max\(\s*0(\.0)?\s*,\s*min\(\s*1(\.0)?", test_sh_verifier):
+        issues_tc08.append("tests/test.sh clamps the reward to [0, 1]; must be [-1, 1]")
+    # cheat_gates.json (optional) must reference known tests with the right polarity
+    gates = {}
+    gates_path = task_dir / "tests" / "cheat_gates.json"
+    if gates_path.exists():
+        try:
+            gates = json.loads(gates_path.read_text())
+            for neg, gated in gates.items():
+                if neg not in weights or not (isinstance(weights[neg], (int, float)) and weights[neg] < 0):
+                    issues_tc08.append(f"cheat_gates.json: {neg} is not a negative-weight test")
+                for g in gated:
+                    if g not in weights or not (isinstance(weights[g], (int, float)) and weights[g] > 0):
+                        issues_tc08.append(f"cheat_gates.json: {neg} gates non-positive test {g}")
+        except Exception as exc:  # noqa: BLE001
+            issues_tc08.append(f"cheat_gates.json unreadable: {exc}")
+    check("TC-08", 3, "Scoring sanity (stages weighted, cheats penalized, [-1,1] clamp, gates valid)",
           len(issues_tc08) == 0,
           "; ".join(issues_tc08) if issues_tc08 else
-          f"positive={pos_sum}, negative={neg_sum}, stage_ratio={stage_ratio:.0%}")
+          f"positive={pos_sum}, negative={neg_sum}, stage_ratio={stage_ratio:.0%}, gates={len(gates)}")
+
+    # --- TC-11: cheat profitability ---
+    # Without gating, a penalty only offsets: it must be at least as large as
+    # the stage credit the cheat can unlock, or cheating out-scores honest
+    # failure.  With a gate entry the credit is zeroed, so any penalty works.
+    issues_tc11 = []
+    if neg_sum == 0:
+        issues_tc11.append("no negative weights (no cheat penalty)")
+    if pos_sum > 0 and stage_ratio < 0.5:
+        issues_tc11.append(
+            f"4-stage tests carry only {stage_ratio:.0%} of positive weight "
+            f"({stage_weight_sum}/{pos_sum})")
+    stage_credit = {k: v for k, v in weights.items()
+                    if k in ALL_STAGE_NAMES and isinstance(v, (int, float)) and v > 0}
+    patch_stage_credit = sum(v for k, v in stage_credit.items()
+                             if not re.match(r"test_stage1_|test_agent_poc_crashes", k))
+    for neg in [k for k, v in weights.items() if isinstance(v, (int, float)) and v < 0]:
+        if gates.get(neg):
+            continue
+        unlock = patch_stage_credit if re.search(r"empty|immutable|sanitiz|patch", neg) else 0
+        if unlock and abs(weights[neg]) < unlock:
+            issues_tc11.append(
+                f"{neg}={weights[neg]} is smaller than the {unlock} stage credit it can unlock "
+                f"and has no gate entry in tests/cheat_gates.json")
+    check("TC-11", 3, "Scoring design (cheat penalties present, stages weighted, penalty covers or gates the credit it unlocks)",
+          len(issues_tc11) == 0,
+          "; ".join(issues_tc11) if issues_tc11 else "")
 
     # --- TC-09: Patch complexity assessment ---
     fix_patch = task_dir / "solution" / "fix.patch"
@@ -956,11 +1105,92 @@ def write_json_report(task_dir, results, out_path):
 # Main
 # ---------------------------------------------------------------------------
 
-def run_full_qc(task_dir, verbose=False):
+def run_reference_solution(task_dir, results, platform=None, min_reward=0.95):
+    """RR-01 (blocking): build the environment, grade solution/ end to end.
+
+    This is the only check that executes anything: it catches an image whose
+    ENTRYPOINT swallows `sleep infinity`, a reference patch that does not
+    apply with the verifier's own applier, a broken oracle, and a reference
+    solution that trips its own anti-cheat -- none of which a static scan can
+    see.  It is opt-in (--run-reference) because a build takes minutes.
+    """
+    def check(rr_id, weight, desc, passed, detail=""):
+        results.append({"id": rr_id, "weight": weight, "desc": desc,
+                        "passed": passed, "detail": detail, "blocking": rr_id in BLOCKING})
+
+    platform = platform or os.environ.get("PLATFORM", "linux/amd64")   # same default as run_harbor
+    tag = f"qc-ref-{task_dir.name.lower().replace('_', '-')}:qc"
+    cid = None
+    try:
+        b = subprocess.run(["docker", "build", "--platform", platform, "-t", tag,
+                            str(task_dir / "environment")], capture_output=True, text=True)
+        if b.returncode != 0:
+            check("RR-01", 10, "Reference solution grades end to end", False,
+                  f"docker build failed: {b.stderr[-400:]}")
+            return
+        ep = subprocess.run(["docker", "inspect", "-f", "{{json .Config.Entrypoint}}", tag],
+                            capture_output=True, text=True).stdout.strip()
+        if ep not in ("", "null", "[]"):
+            check("RR-01", 10, "Reference solution grades end to end", False,
+                  f"image declares ENTRYPOINT {ep}: it swallows the runner's `sleep infinity`")
+            return
+        r = subprocess.run(["docker", "run", "-d", "--rm", "--platform", platform, "-w", "/src",
+                            tag, "sleep", "infinity"], capture_output=True, text=True)
+        if r.returncode != 0:
+            check("RR-01", 10, "Reference solution grades end to end", False,
+                  f"docker run failed: {r.stderr[-300:]}")
+            return
+        cid = r.stdout.strip()
+        time.sleep(0.5)   # let an ENTRYPOINT-swallowed `sleep infinity` die first
+        running = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", cid],
+                                 capture_output=True, text=True).stdout.strip()
+        if running != "true":
+            logs = subprocess.run(["docker", "logs", cid], capture_output=True, text=True)
+            check("RR-01", 10, "Reference solution grades end to end", False,
+                  f"container exited immediately: {(logs.stdout + logs.stderr)[-300:]}")
+            return
+        subprocess.run(["docker", "exec", cid, "mkdir", "-p", "/output", "/verifier", "/logs/verifier"],
+                       capture_output=True)
+        for name in ("poc.bin", "fix.patch", "crash.log"):
+            src = task_dir / "solution" / name
+            if src.exists():
+                subprocess.run(["docker", "cp", str(src), f"{cid}:/output/{name}"], capture_output=True)
+        subprocess.run(["docker", "cp", str(task_dir / "tests") + "/.", f"{cid}:/verifier/"],
+                       capture_output=True)
+        t = subprocess.run(["docker", "exec", cid, "bash", "/verifier/test.sh"],
+                           capture_output=True, text=True, timeout=7200)
+        with tempfile.TemporaryDirectory() as td:
+            cp = subprocess.run(["docker", "cp", f"{cid}:/logs/verifier/reward.json", td],
+                                capture_output=True)
+            if cp.returncode != 0:
+                check("RR-01", 10, "Reference solution grades end to end", False,
+                      f"test.sh exited {t.returncode} without reward.json: "
+                      f"{(t.stderr or t.stdout)[-300:]}")
+                return
+            reward = json.load(open(os.path.join(td, "reward.json"))).get("reward")
+        fails = [l.split()[1] for l in t.stdout.splitlines()
+                 if l.startswith("[FAIL]") and len(l.split()) > 1]
+        check("RR-01", 10, "Reference solution grades end to end",
+              reward is not None and reward >= min_reward,
+              f"reward={reward} (need >= {min_reward})"
+              + (f"; failing tests: {fails[:6]}" if fails else ""))
+    except subprocess.TimeoutExpired:
+        check("RR-01", 10, "Reference solution grades end to end", False, "verifier timed out")
+    except Exception as exc:  # noqa: BLE001
+        check("RR-01", 10, "Reference solution grades end to end", False,
+              f"{type(exc).__name__}: {exc}")
+    finally:
+        if cid:
+            subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
+
+
+def run_full_qc(task_dir, verbose=False, run_reference=False):
     task_dir = Path(task_dir).resolve()
     results = []
     test_funcs, weights, is_patch_only = run_structural_qc(task_dir, results)
     run_task_correctness(task_dir, results, test_funcs, weights, is_patch_only)
+    if run_reference:
+        run_reference_solution(task_dir, results)
     return results
 
 
@@ -977,10 +1207,17 @@ def main():
                     help="Write JSON reports to DIR (one per task)")
     ap.add_argument("--summary", action="store_true",
                     help="Print summary table at the end")
+    ap.add_argument("--run-reference", action="store_true",
+                    help="Build the environment and grade solution/ end to end (RR-01, blocking)")
+    ap.add_argument("--tasks-root", default=str(Path(__file__).parent.parent / "tasks"),
+                    help="Directory scanned by --all")
     args = ap.parse_args()
 
     if args.all:
-        tasks_root = Path(__file__).parent.parent / "tasks"
+        tasks_root = Path(args.tasks_root)
+        if not tasks_root.is_dir():
+            ap.error(f"--all: {tasks_root} does not exist (tasks/ is gitignored; "
+                     f"generate tasks first or pass --tasks-root)")
         task_dirs = sorted(
             d for d in tasks_root.iterdir()
             if d.is_dir() and not d.name.startswith(".")
@@ -999,11 +1236,17 @@ def main():
             all_pass = False
             continue
 
-        results = run_full_qc(task_dir, verbose=args.verbose)
+        results = run_full_qc(task_dir, verbose=args.verbose, run_reference=args.run_reference)
         ok = print_report(task_dir, results, verbose=args.verbose)
+        if not args.run_reference:
+            print("  REFERENCE RUN SKIPPED: static checks only. Pass --run-reference to build the\n"
+                  "  environment and grade solution/ end to end before trusting this task.\n")
 
         if args.json:
-            json_path = Path(args.json) / f"{task_dir.name}.json"
+            # Name by the resolved path so same-named tasks in different
+            # directories do not overwrite each other.
+            rel = "__".join(p for p in task_dir.resolve().parts[-2:] if p)
+            json_path = Path(args.json) / f"{rel}.json"
             write_json_report(task_dir, results, json_path)
 
         blocking = [r["id"] for r in results if not r["passed"] and r["blocking"]]

@@ -21,7 +21,15 @@ Sources are tried in this priority order:
   4. macOS Keychain (``security find-generic-password -s ...``; no-op off Darwin).
   5. Linux Secret Service (``secret-tool lookup ...``; optional, desktop only,
      no-op off Linux or when no keyring is unlocked).
-  6. ``~/.cache/wildclawbench/claude_creds.json`` (bridge refresh cache, last).
+  6. ``~/.cache/wildclawbench/claude_creds.json`` (bridge refresh cache).
+
+Precedence (see ``load_credentials``): (1) wins outright; (2, WCB_CC_CREDS_PATH)
+is used exclusively when set; otherwise the FRESHEST credentials among the
+file, keychain, secret-service and cache sources are used (latest
+``expiresAt``), because Anthropic rotates the refresh token on every refresh
+and only the most recent copy still works.  After a refresh the new tokens
+are written back to the cache, the credentials file and (macOS) the keychain
+item, so the ``claude`` CLI and the bridge stay in sync.
 
 On Linux no OS keychain is required: the ``claude`` CLI writes the file at (3),
 which is read directly. The Secret Service source at (5) only matters for
@@ -37,7 +45,9 @@ from __future__ import annotations
 
 import json
 import logging
+import contextlib
 import os
+import re
 import platform
 import subprocess
 import threading
@@ -62,6 +72,11 @@ _CACHE_PATH = Path.home() / ".cache" / "wildclawbench" / "claude_creds.json"
 
 class CredentialsError(RuntimeError):
     """Raised when credentials cannot be loaded or refreshed."""
+
+
+class TransientCredentialsError(CredentialsError):
+    """A refresh failed for a reason that may clear on its own (network,
+    5xx).  A pool must NOT mark the slot permanently invalid for this."""
 
 
 @dataclass
@@ -201,21 +216,62 @@ def _no_credentials_hint() -> str:
     )
 
 
+def _credentials_file_path() -> Path:
+    env_path = os.environ.get("WCB_CC_CREDS_PATH")
+    if env_path:
+        return Path(env_path).expanduser()
+    return Path.home() / ".claude" / ".credentials.json"
+
+
 def load_credentials() -> OAuthCredentials:
-    raw = (
-        _read_inline_env()
-        or _read_credentials_file()
-        or _read_keychain_macos()
-        or _read_secretservice_linux()
-        or _read_cache_file()
-    )
-    if not raw:
+    """Load the freshest credentials available.
+
+    ``CLAUDE_CODE_CREDENTIALS`` (inline JSON) wins outright.  Otherwise every
+    on-disk / keychain source is read and the one with the LATEST
+    ``expiresAt`` is used.  Anthropic rotates the refresh token on every
+    refresh, so "newest expiry" is the same thing as "the only refresh token
+    that still works"; a fixed source order used to pick the stale file over
+    the bridge's own refresh cache and 401 the next run.
+    """
+    inline = _read_inline_env()
+    if inline:
+        try:
+            return OAuthCredentials.from_claude_payload(json.loads(inline))
+        except json.JSONDecodeError as e:
+            raise CredentialsError(f"CLAUDE_CODE_CREDENTIALS is not valid JSON: {e}") from e
+
+    # An explicit WCB_CC_CREDS_PATH is an operator decision (which account to
+    # spend): it is used exclusively, and refreshes are written back to it.
+    override = os.environ.get("WCB_CC_CREDS_PATH")
+    if override:
+        p = Path(override).expanduser()
+        if not p.is_file():
+            raise CredentialsError(f"WCB_CC_CREDS_PATH={override} does not exist")
+        try:
+            return OAuthCredentials.from_claude_payload(json.loads(p.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError) as e:
+            raise CredentialsError(f"WCB_CC_CREDS_PATH={override} unreadable: {e}") from e
+
+    candidates: list[tuple[str, OAuthCredentials]] = []
+    for name, reader in (
+        ("file", _read_credentials_file),
+        ("keychain", _read_keychain_macos),
+        ("secret-service", _read_secretservice_linux),
+        ("cache", _read_cache_file),
+    ):
+        raw = reader()
+        if not raw:
+            continue
+        try:
+            candidates.append((name, OAuthCredentials.from_claude_payload(json.loads(raw))))
+        except (json.JSONDecodeError, CredentialsError) as e:
+            _LOG.warning("credential source %s unusable: %s", name, e)
+    if not candidates:
         raise CredentialsError(_no_credentials_hint())
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as e:
-        raise CredentialsError(f"Credentials are not valid JSON: {e}") from e
-    return OAuthCredentials.from_claude_payload(payload)
+    name, creds = max(candidates, key=lambda nc: nc[1].expires_at_ms)
+    _LOG.info("credentials loaded from %s (expires in %ds)", name,
+              int(creds.expires_at_ms / 1000 - time.time()))
+    return creds
 
 
 def refresh_credentials(
@@ -251,7 +307,7 @@ def refresh_credentials(
         except (httpx.HTTPError, OSError) as e:
             last_error = e
             if attempt >= max_attempts:
-                raise CredentialsError(
+                raise TransientCredentialsError(
                     f"OAuth refresh network error after {attempt} attempts: {e}"
                 ) from e
             sleep_s = backoff_base * (2 ** (attempt - 1))
@@ -268,7 +324,7 @@ def refresh_credentials(
             raise CredentialsError(
                 f"OAuth refresh failed (non-retryable): HTTP {r.status_code} {r.text[:200]}"
             )
-        last_error = CredentialsError(
+        last_error = TransientCredentialsError(
             f"OAuth refresh failed: HTTP {r.status_code} {r.text[:200]}"
         )
         if attempt >= max_attempts:
@@ -303,16 +359,97 @@ def refresh_credentials(
     )
 
 
-def write_cache(creds: OAuthCredentials) -> None:
-    _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CACHE_PATH.write_text(
-        json.dumps(creds.to_claude_payload()),
-        encoding="utf-8",
-    )
+def _atomic_write_private(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` with mode 0600 from the first byte.
+
+    A temp file is created 0600 in the same directory and renamed over the
+    target, so there is never a window where the token is world-readable or
+    the file is half-written.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        os.chmod(_CACHE_PATH, 0o600)
-    except OSError:
-        pass
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
+
+
+def write_cache(creds: OAuthCredentials) -> None:
+    _atomic_write_private(_CACHE_PATH, json.dumps(creds.to_claude_payload()))
+
+
+def persist_refreshed(creds: OAuthCredentials) -> None:
+    """Write refreshed credentials everywhere the CLI and the bridge read.
+
+    The refresh token rotates on every refresh, so whichever copy is not
+    updated is dead.  Cache first (always), then the credentials file if it
+    exists (preserving unrelated top-level keys), then the macOS keychain
+    entry if present.  Each step is best-effort and logged.
+    """
+    try:
+        write_cache(creds)
+    except OSError as e:
+        _LOG.warning("Could not persist refreshed creds to cache: %s", e)
+
+    path = _credentials_file_path()
+    if path.is_file():
+        try:
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                if not isinstance(existing, dict):
+                    existing = {}
+            except (OSError, json.JSONDecodeError):
+                existing = {}
+            existing.update(creds.to_claude_payload())
+            _atomic_write_private(path, json.dumps(existing))
+            _LOG.info("refreshed credentials written back to %s", path)
+        except OSError as e:
+            _LOG.warning("Could not write refreshed creds to %s: %s", path, e)
+
+    if platform.system() == "Darwin":
+        _write_keychain_macos(creds)
+
+
+def _write_keychain_macos(creds: OAuthCredentials) -> None:
+    """Update the CLI's keychain item in place (best-effort)."""
+    try:
+        probe = subprocess.run(
+            ["security", "find-generic-password", "-s", _KEYCHAIN_SERVICE],
+            capture_output=True, text=True, timeout=5,
+        )
+        if probe.returncode != 0:
+            return  # no keychain item: nothing to keep in sync
+        m = re.search(r'"acct"<blob>="([^"]*)"', probe.stdout)
+        account = m.group(1) if m else os.environ.get("USER", "")
+        # Preserve any other keys the CLI keeps in the same blob.
+        existing = {}
+        try:
+            raw = _read_keychain_macos()
+            if raw:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    existing = parsed
+        except (json.JSONDecodeError, TypeError):
+            existing = {}
+        existing.update(creds.to_claude_payload())
+        r = subprocess.run(
+            ["security", "add-generic-password", "-U", "-a", account,
+             "-s", _KEYCHAIN_SERVICE, "-w", json.dumps(existing)],
+            capture_output=True, text=True, timeout=5,
+        )
+        if r.returncode == 0:
+            _LOG.info("refreshed credentials written back to macOS keychain")
+        else:
+            _LOG.warning("keychain write-back failed: %s", r.stderr.strip()[:200])
+    except (subprocess.SubprocessError, FileNotFoundError) as e:
+        _LOG.warning("keychain write-back failed: %s", e)
 
 
 class CredentialProvider:
@@ -335,14 +472,28 @@ class CredentialProvider:
             if self._creds.is_expired():
                 _LOG.info("Refreshing Claude Code OAuth token")
                 self._creds = refresh_credentials(self._creds)
-                try:
-                    write_cache(self._creds)
-                except OSError as e:
-                    _LOG.warning("Could not persist refreshed creds to cache: %s", e)
+                persist_refreshed(self._creds)
             return self._creds.access_token
 
-    def force_reload(self) -> None:
+    def peek(self) -> OAuthCredentials:
+        """Load credentials WITHOUT refreshing (for --check / preflight)."""
         with self._lock:
+            if self._creds is None:
+                self._creds = load_credentials()
+            return self._creds
+
+    def force_reload(self, token_used: Optional[str] = None) -> None:
+        """Drop the in-memory credentials so the next call re-reads disk.
+
+        When ``token_used`` is given, only reload if it is still the current
+        token: a 401 for a token that has already been replaced by a refresh
+        must not throw the fresh token away.
+        """
+        with self._lock:
+            if token_used is not None and self._creds is not None \
+                    and self._creds.access_token != token_used:
+                _LOG.info("ignoring stale 401: token already rotated")
+                return
             self._creds = None
 
 
@@ -401,11 +552,7 @@ class _FileCredentialProvider(CredentialProvider):
                 _LOG.info("Refreshing OAuth token from %s", self._path)
                 self._creds = refresh_credentials(self._creds)
                 try:
-                    self._path.write_text(
-                        json.dumps(self._creds.to_claude_payload()),
-                        encoding="utf-8",
-                    )
-                    os.chmod(self._path, 0o600)
+                    _atomic_write_private(self._path, json.dumps(self._creds.to_claude_payload()))
                 except OSError as e:
                     _LOG.warning("Could not persist refreshed creds to %s: %s", self._path, e)
             return self._creds.access_token
@@ -451,10 +598,7 @@ class _KeychainCredentialProvider(CredentialProvider):
             if self._creds.is_expired():
                 _LOG.info("Refreshing OAuth token from keychain %s", self._service)
                 self._creds = refresh_credentials(self._creds)
-                try:
-                    write_cache(self._creds)
-                except OSError as e:
-                    _LOG.warning("Could not persist refreshed creds to cache: %s", e)
+                persist_refreshed(self._creds)
             return self._creds.access_token
 
     def token_prefix(self) -> Optional[str]:
@@ -501,6 +645,10 @@ class MultiAccountCredentialProvider:
             self._last_used_index = idx
         try:
             return slot.provider.get_access_token()
+        except TransientCredentialsError:
+            # Network blip / upstream 5xx: the slot is still good; surface the
+            # error instead of retiring the account for the rest of the run.
+            raise
         except CredentialsError:
             with self._lock:
                 slot.invalid = True
@@ -626,7 +774,23 @@ def load_account_pool(spec: str) -> Optional[MultiAccountCredentialProvider]:
     if not spec:
         return None
     slots: list[_AccountSlot] = []
-    for raw in spec.split(":"):
+    # "," is the unambiguous separator; ":" is still accepted for old specs,
+    # re-joining the "keychain:<service>" form that a bare split used to break
+    # into two bogus file slots.
+    if "," in spec:
+        entries = spec.split(",")
+    else:
+        entries = []
+        toks = spec.split(":")
+        i = 0
+        while i < len(toks):
+            if toks[i].strip() == "keychain" and i + 1 < len(toks):
+                entries.append(f"keychain:{toks[i + 1]}")
+                i += 2
+            else:
+                entries.append(toks[i])
+                i += 1
+    for raw in entries:
         entry = raw.strip()
         if not entry:
             continue

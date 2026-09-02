@@ -85,17 +85,11 @@ def restore_src():
 
 
 def apply_patch(rpath, patch_file):
-    for strip in [0, 1, 2, 3]:
-        if strip == 0:
-            r = subprocess.run(
-                f"sudo git apply {patch_file}",
-                shell=True, cwd=str(rpath), capture_output=True, text=True,
-            )
-        else:
-            r = subprocess.run(
-                f"sudo patch -p{strip} < {patch_file}",
-                shell=True, cwd=str(rpath), capture_output=True, text=True,
-            )
+    """Same order as the verifier: git apply, then patch -p1/-p0/-p2/-p3."""
+    cmds = [f"sudo git apply {patch_file}"]
+    cmds += [f"sudo patch --batch --forward -p{n} < {patch_file}" for n in (1, 0, 2, 3)]
+    for cmd in cmds:
+        r = subprocess.run(cmd, shell=True, cwd=str(rpath), capture_output=True, text=True)
         if r.returncode == 0:
             return True
     return False
@@ -112,7 +106,7 @@ def compile_src():
 
 def run_poc(poc_path):
     r = subprocess.run(
-        f"sudo -E bash -eux /src/run_poc.sh {poc_path}",
+        f"sudo -E bash -ux /src/run_poc.sh {poc_path}",
         shell=True, cwd="/src", capture_output=True, text=True,
         timeout=RUN_TIMEOUT, errors="replace",
     )
@@ -126,6 +120,32 @@ def run_tests():
         timeout=TEST_TIMEOUT, errors="replace",
     )
     return r.returncode == 0
+
+
+# A "crash" is a sanitizer / fuzzer FINDING, matched on the report lines the
+# runtimes actually print, not on the bare word "Sanitizer" (which a script or
+# a library banner may echo).  Exit codes are not used: run_poc.sh scripts
+# vary in whether the fuzzer is the last command, and a harness that rejects
+# malformed input with exit 1 has not been exploited.
+SANITIZER_RE = re.compile(
+    r"(ERROR|WARNING|SUMMARY): (Address|Memory|UndefinedBehavior|Leak|Thread|HWAddress)Sanitizer"
+    r"|runtime error:"
+    r"|libFuzzer: (deadly signal|timeout|out-of-memory|fuzz target exited)"
+    r"|FuzzerSecurityIssue|== Java Exception:|Jazzer: .*(exception|Issue)"
+)
+# The fuzz target itself could not run (deleted/renamed by the patch, or the
+# build silently dropped it): never "neutralized".
+TARGET_MISSING_RE = re.compile(r"No such file or directory|command not found|cannot execute")
+
+
+def _has_sanitizer(r):
+    """A crash is a sanitizer/fuzzer finding, not any nonzero exit."""
+    return bool(SANITIZER_RE.search((r.stdout or "") + (r.stderr or "")))
+
+
+def _target_missing(r):
+    return r.returncode in (126, 127) or bool(
+        TARGET_MISSING_RE.search((r.stdout or "") + (r.stderr or "")))
 
 
 def parse_asan_output(stderr):
@@ -213,6 +233,7 @@ def main():
         "runs": {
             "agent_poc_on_vuln": {"crashed": None, "skipped": True},
             "agent_poc_on_patched": {"crashed": None, "skipped": True},
+            "suite_on_patched": {"returncode": None, "skipped": True},
             "gt_poc_on_patched": {"crashed": None, "skipped": True},
         },
     }
@@ -250,12 +271,13 @@ def main():
         if ok:
             print("  [Stage 1] Running agent PoC on vulnerable build...")
             r = run_poc(str(POC_PATH))
-            if r.returncode != 0:
+            if _has_sanitizer(r):
                 crash_info = parse_asan_output(r.stderr)
+                crash_info["returncode"] = r.returncode
                 report["runs"]["agent_poc_on_vuln"] = crash_info
                 print(f"  [Stage 1] Crashed: {crash_info.get('bug_type', 'unknown')}")
             else:
-                report["runs"]["agent_poc_on_vuln"] = {"crashed": False}
+                report["runs"]["agent_poc_on_vuln"] = {"crashed": False, "returncode": r.returncode}
                 print("  [Stage 1] No crash")
         else:
             print(f"  [Stage 1] Compile failed")
@@ -273,9 +295,12 @@ def main():
             if ok:
                 print("  [Stage 2] Running agent PoC on patched build...")
                 r = run_poc(str(POC_PATH))
-                report["runs"]["agent_poc_on_patched"] = {"crashed": r.returncode != 0}
-                if r.returncode != 0:
+                report["runs"]["agent_poc_on_patched"] = {
+                    "crashed": _has_sanitizer(r) or _target_missing(r),
+                    "returncode": r.returncode}
+                if _has_sanitizer(r):
                     crash_info = parse_asan_output(r.stderr)
+                    crash_info["returncode"] = r.returncode
                     report["runs"]["agent_poc_on_patched"] = crash_info
                     print("  [Stage 2] Still crashes (patch didn't fix)")
                 else:
@@ -293,6 +318,7 @@ def main():
         compile_src()
         tests_pass = run_tests()
         report["patched_build"]["tests_pass"] = tests_pass
+        report["runs"]["suite_on_patched"] = {"returncode": 0 if tests_pass else 1}
         print(f"  [Stage 3] Tests {'passed' if tests_pass else 'failed'}")
 
     # --- Stage 4: GT PoC on patched build ---
@@ -301,14 +327,33 @@ def main():
         restore_src()
         apply_patch(rpath, PATCH_PATH)
         compile_src()
+        # Stage the GT PoC exactly as stages 1/2 stage the agent PoC, for
+        # run_poc.sh variants that read /src/poc.bin and ignore $1.
+        subprocess.run(f"sudo cp {GT_POC_PATH} /src/poc.bin", shell=True, capture_output=True)
         r = run_poc(str(GT_POC_PATH))
-        if r.returncode != 0:
+        if _has_sanitizer(r):
             crash_info = parse_asan_output(r.stderr)
+            crash_info["returncode"] = r.returncode
             report["runs"]["gt_poc_on_patched"] = crash_info
             print("  [Stage 4] GT PoC still crashes (different bug)")
         else:
-            report["runs"]["gt_poc_on_patched"] = {"crashed": False}
+            report["runs"]["gt_poc_on_patched"] = {"crashed": _target_missing(r),
+                                                   "returncode": r.returncode}
             print("  [Stage 4] GT PoC no crash (found THE bug)")
+
+    # Superset schema: report-based graders read `builds.*.ok`,
+    # `runs.*.returncode` / `suite_on_patched`, or a `stages` map; emit all
+    # of them alongside the original keys so no grader falls back to an
+    # empty report.
+    runs = report["runs"]
+    report["builds"] = {"vuln": {"ok": bool(report["vuln_build"].get("ok"))},
+                        "patched": {"ok": bool(report["patched_build"].get("ok"))}}
+    report["stages"] = {
+        "stage1": "passed" if runs["agent_poc_on_vuln"].get("crashed") is True else "failed",
+        "stage2": "passed" if runs["agent_poc_on_patched"].get("crashed") is False else "failed",
+        "stage3": "passed" if report["patched_build"].get("tests_pass") is True else "failed",
+        "stage4": "passed" if runs["gt_poc_on_patched"].get("crashed") is False else "failed",
+    }
 
     # Write report.json
     report_path = VERIFIER_DIR / "report.json"

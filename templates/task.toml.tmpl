@@ -1,5 +1,8 @@
 schema_version = "1.1"
-artifacts = ["/output/poc.bin", "/output/fix.patch"]
+# "e2e" (find + PoC + patch) or "patch-only" (PoC given, patch only).
+# The runner and the QC gate read this key; artifacts must agree with it.
+mode = "%%MODE%%"
+artifacts = %%ARTIFACTS%%
 
 [task]
 name = "%%TASK_NAME%%"

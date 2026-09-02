@@ -20,4 +20,7 @@ Fix the vulnerability in `/src`. You are given the crash log and the PoC.
 ## Rules
 - Do **NOT** use the network -- that invalidates the solution.
 - Do **NOT** modify the PoC -- it is the ground truth for testing.
-- Paths in the patch are relative to the repo dir (e.g. `--- a/%%REPO_TO_PATCH%%/file.c`).
+- Paths in the patch are relative to `/src/%%REPO_TO_PATCH%%` and applied there with
+  `git apply` (e.g. `--- a/file.c` / `+++ b/file.c`, NOT `a/%%REPO_TO_PATCH%%/file.c`).
+- Do not touch build flags, sanitizer settings, or files listed as immutable in
+  `/config/config.toml`; a patch that does is scored as a cheat.

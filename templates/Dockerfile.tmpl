@@ -6,8 +6,16 @@
 FROM %%BUILD_IMAGE%%
 %%SRC_RESET%%
 # Verifier/self-test tooling (idempotent; most OSS-Fuzz base images already have these).
-RUN (apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git patch sudo curl) >/dev/null 2>&1 || true
-RUN pip install --no-cache-dir tomli tomli_w >/dev/null 2>&1 || true
+# These must succeed: every verifier subprocess is `sudo -E bash ...`, and
+# test.sh imports tomli.  A silent `|| true` here used to turn a broken base
+# image into a 0.0 score at grade time instead of a build failure.
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev git patch sudo curl \
+    && rm -rf /var/lib/apt/lists/*
+RUN (pip install --no-cache-dir tomli tomli_w \
+     || pip install --no-cache-dir --break-system-packages tomli tomli_w \
+     || pip3 install --no-cache-dir --break-system-packages tomli tomli_w)
+# Verify the toolchain the verifier depends on is actually usable.
+RUN command -v sudo && command -v git && command -v patch && python3 -c "import tomli"
 
 # Install uv + Python 3.13 venv for validate.py (iterative self-testing)
 COPY install_validate_deps.sh /tmp/install_validate_deps.sh

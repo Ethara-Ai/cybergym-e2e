@@ -8,7 +8,10 @@ import subprocess
 import os
 from pathlib import Path
 
-import boto3
+try:
+    import boto3  # only needed by the Bedrock provider
+except ImportError:  # pragma: no cover
+    boto3 = None
 import httpx
 import tomli
 import tomli_w

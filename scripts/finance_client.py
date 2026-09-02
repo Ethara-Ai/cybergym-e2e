@@ -25,63 +25,49 @@ from pathlib import Path
 # USD per 1M tokens, (input, output).  Anthropic first-party list prices.
 # Override or extend without touching this file via FINANCE_PRICING_JSON, e.g.
 #   FINANCE_PRICING_JSON={"claude-opus-4-8":[5,25],"my-model":[1.5,7.5]}
-_DEFAULT_PRICING = {
-    "claude-fable-5":    (10.0, 50.0),
-    "claude-mythos-5":   (10.0, 50.0),
-    "claude-opus-5":     (15.0, 75.0),
-    "claude-opus-4-8":   (15.0, 75.0),
-    "claude-opus-4-7":   (15.0, 75.0),
-    "claude-opus-4-6":   (15.0, 75.0),
-    "claude-sonnet-5":   (3.0, 15.0),
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-haiku-4-5":  (1.0, 5.0),
-}
+# The pricing table lives in scripts/judge_lib.py (MODEL_PRICING) so the
+# judge's cost line and the Finance API's judge_cost_usd can never disagree.
+# FINANCE_PRICING_JSON still overrides per model with (input, output) pairs;
+# cache rates for an override are derived with the standard multipliers.
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent))
+import judge_lib as _judge_lib  # noqa: E402
 
-# Family fallback for IDs not listed above (e.g. dated snapshots such as
-# claude-sonnet-4-20250514, or bedrock IDs such as us.anthropic.claude-...).
-_FAMILY_PRICING = (
-    ("fable",  (10.0, 50.0)),
-    ("mythos", (10.0, 50.0)),
-    ("opus",   (15.0, 75.0)),
-    ("sonnet", (3.0, 15.0)),
-    ("haiku",  (1.0, 5.0)),
-)
-
-# Cache multipliers applied to the INPUT rate.
+# Cache multipliers applied to the INPUT rate for FINANCE_PRICING_JSON overrides.
 _CACHE_READ_MULT = 0.1     # cache_read_input_tokens
 _CACHE_WRITE_MULT = 1.25   # cache_creation_input_tokens, 5-minute TTL
 
 _warned_models = set()
 
 
-def _pricing_table():
-    """Default table merged with FINANCE_PRICING_JSON (which wins)."""
-    table = dict(_DEFAULT_PRICING)
+def _override_table():
+    """FINANCE_PRICING_JSON entries as full 4-rate dicts."""
+    table = {}
     raw = os.environ.get("FINANCE_PRICING_JSON", "").strip()
     if raw:
         try:
             for name, pair in json.loads(raw).items():
-                table[name] = (float(pair[0]), float(pair[1]))
+                rate_in, rate_out = float(pair[0]), float(pair[1])
+                table[name] = {"input": rate_in, "output": rate_out,
+                               "cache_write": rate_in * _CACHE_WRITE_MULT,
+                               "cache_read": rate_in * _CACHE_READ_MULT}
         except Exception as e:
             print(f"  [finance] Warning: ignoring bad FINANCE_PRICING_JSON ({e})")
     return table
 
 
 def _rates_for(model_name):
-    """(input_rate, output_rate) per 1M tokens, or None if the model is unknown."""
+    """Per-1M-token rate dict for the model, or None if it is unpriced."""
     if not model_name:
         return None
-    table = _pricing_table()
-    if model_name in table:
-        return table[model_name]
+    overrides = _override_table()
+    if model_name in overrides:
+        return overrides[model_name]
     low = model_name.lower()
-    for key, rates in table.items():          # dated snapshot of a known ID
+    for key, rates in overrides.items():      # dated snapshot of an override
         if low.startswith(key.lower()):
             return rates
-    for family, rates in _FAMILY_PRICING:     # last resort: family match
-        if family in low:
-            return rates
-    return None
+    return _judge_lib.pricing_for(model_name)
 
 
 def _cost_usd(model_name, input_tokens, output_tokens, cache_read, cache_write):
@@ -99,12 +85,11 @@ def _cost_usd(model_name, input_tokens, output_tokens, cache_read, cache_write):
             print(f"  [finance] Warning: no price for model {model_name!r}; "
                   f"cost reported as 0.0 (set FINANCE_PRICING_JSON to fix)")
         return 0.0
-    rate_in, rate_out = rates
     total = (
-        (input_tokens or 0) * rate_in
-        + (output_tokens or 0) * rate_out
-        + (cache_read or 0) * rate_in * _CACHE_READ_MULT
-        + (cache_write or 0) * rate_in * _CACHE_WRITE_MULT
+        (input_tokens or 0) * rates["input"]
+        + (output_tokens or 0) * rates["output"]
+        + (cache_read or 0) * rates["cache_read"]
+        + (cache_write or 0) * rates["cache_write"]
     ) / 1_000_000.0
     return round(total, 6)
 

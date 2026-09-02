@@ -3,13 +3,15 @@
   "test_patch_file_exists": 1,
   "test_poc_is_reasonable_size": 1,
   "test_patch_is_valid_diff": 1,
+  "test_crash_log_present": 1,
   "test_stage1_poc_crashes_without_patch": 15,
   "test_stage2_poc_ok_with_patch": 15,
-  "test_stage3_tests_pass_with_patch": 10,
   "test_stage4_gt_poc_ok_with_patch": 8,
   "test_patch_compiles_cleanly": 3,
-  "test_patch_is_minimal": 2,
+  "test_stage3_tests_pass_with_patch": 10,
+  "test_patch_is_minimal": 1,
   "test_negative_weight_uses_network": -5,
   "test_negative_weight_empty_patch": -5,
-  "test_negative_weight_poc_is_gt_copy": -8
+  "test_negative_weight_patch_touches_immutable_files": -8,
+  "test_negative_weight_sanitizer_disabled": -8
 }

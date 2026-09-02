@@ -1,4 +1,7 @@
 #!/bin/bash
+# DEPRECATED: legacy runner path (run_agent.py). It scores on a binary scale,
+# writes no reward/ctrf/rubric files and applies no network lockdown.
+# Use run_harbor.py for anything you intend to report.
 # Unified batch runner for cybergym-e2e agents
 #
 # Usage:
@@ -38,13 +41,15 @@ if [[ "${1:-}" == "--stop" ]]; then
     echo "Stopping all batch processes..."
 
     # Kill batch_run.sh processes
-    pkill -9 -f "batch_run.sh" 2>/dev/null || true
+    # Do not kill this very shell (it matches the pattern too).
+    pgrep -f "batch_run.sh" | grep -vx "$$" | xargs -r kill -9 2>/dev/null || true
 
     # Kill run_agent.py processes
     pkill -9 -f "run_agent.py" 2>/dev/null || true
 
     # Kill Docker containers. Disable for now to avoid killing unrelated containers.
-    docker ps -q --filter "name=claude-agent" 2>/dev/null | xargs -r docker kill 2>/dev/null || true
+    # run_agent.py names containers <agent>-<uuid>, e.g. claude-code-...
+    docker ps -q --filter "name=^claude-code-" 2>/dev/null | xargs -r docker kill 2>/dev/null || true
     # docker ps -q 2>/dev/null | head -20 | xargs -r docker kill 2>/dev/null || true
 
     echo "Done."
@@ -94,10 +99,15 @@ cleanup() {
     pkill -P $$ 2>/dev/null || true
 
     # Kill run_agent processes started by us
-    pkill -f "run_agent.py.*--aws-profile $AWS_PROFILE" 2>/dev/null || true
+    if [ -n "$AWS_PROFILE" ]; then
+        pkill -f "run_agent.py.*--aws-profile $AWS_PROFILE" 2>/dev/null || true
+    else
+        echo "AWS_PROFILE is empty: not killing run_agent.py processes (pattern would match everyone's)"
+    fi
 
     # Kill Docker containers FIXME: This may kill unrelated containers
-    docker ps -q --filter "name=claude-agent" 2>/dev/null | xargs -r docker kill 2>/dev/null || true
+    # run_agent.py names containers <agent>-<uuid>, e.g. claude-code-...
+    docker ps -q --filter "name=^claude-code-" 2>/dev/null | xargs -r docker kill 2>/dev/null || true
 
     echo "[$(date +%H:%M:%S)] Cleanup complete"
     exit 130
@@ -111,7 +121,7 @@ if [ ! -f "$TASKS_FILE" ]; then
     exit 1
 fi
 
-TOTAL=$(wc -l < "$TASKS_FILE" | tr -d ' ')
+TOTAL=$(grep -cvE '^[[:space:]]*(#|$)' "$TASKS_FILE" || true)
 
 echo "=========================================="
 echo "Batch Runner"
@@ -132,12 +142,13 @@ echo "Output dir: $AGENT_OUTPUT_DIR"
 echo "=========================================="
 echo ""
 
-mkdir -p $AGENT_OUTPUT_DIR
+mkdir -p "$AGENT_OUTPUT_DIR"
 
 # Function to run a single task
 run_task() {
     local task="$1"
     local task_safe="${task//\//_}"
+    local exit_code=0
 
     echo "[$(date +%H:%M:%S)] Starting: $task"
 
@@ -155,9 +166,7 @@ run_task() {
         --anthropic-model-id "$ANTHROPIC_MODEL_ID" \
         --aws-profile "$AWS_PROFILE" \
         --aws-region "$AWS_REGION" \
-        --agent-output "$AGENT_OUTPUT_DIR" > "$log_file" 2>&1 || true
-
-    local exit_code=$?
+        --agent-output "$AGENT_OUTPUT_DIR" > "$log_file" 2>&1 || exit_code=$?
 
     # Extract result from log file
     if grep -q 'Status: SUCCESS' "$log_file" 2>/dev/null; then
@@ -181,7 +190,8 @@ echo ""
 
 START_TIME=$(date +%s)
 
-cat "$TASKS_FILE" | xargs -P "$MAX_PARALLEL" -I {} bash -c 'run_task "$@"' _ {}
+# Comments and blank lines are not task names.
+grep -vE '^[[:space:]]*(#|$)' "$TASKS_FILE" | xargs -P "$MAX_PARALLEL" -I {} bash -c 'run_task "$@"' _ {}
 
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))

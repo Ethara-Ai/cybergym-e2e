@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# DEPRECATED: legacy runner. Scores on a binary scale, writes no reward/ctrf/
+# rubric files, applies no network lockdown and pins no platform. Use
+# run_harbor.py for anything you intend to report.
 """
 Unified agent runner for cybergym-e2e.
 
@@ -680,7 +683,9 @@ def _execute_codex(container_id, prompt, output_file, args):
 
     # prepare auth.json
     print("Preparing Codex auth in container")
-    openai_key = env["OPENAI_API_KEY"]
+    openai_key = env.get("OPENAI_API_KEY")
+    if not openai_key:
+        raise SystemExit("--agent codex requires OPENAI_API_KEY in the environment")
     exec_run(
         container_id,
         f'''cat <<EOF >"$HOME/.codex/auth.json"

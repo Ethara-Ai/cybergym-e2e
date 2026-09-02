@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# DEPRECATED: legacy runner. Scores on a binary scale, writes no reward/ctrf/
+# rubric files, applies no network lockdown and pins no platform. Use
+# run_harbor.py for anything you intend to report.
 """Run a cybergym agent using the OpenHands Software Agent SDK.
 
 Reads the task prompt from /opt/prompt.txt (written by the harness before

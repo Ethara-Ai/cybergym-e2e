@@ -209,6 +209,10 @@ def classify_anthropic_error(
             is_cap = True
         if tokens_remaining == 0:
             is_cap = True
+        if retry_after is None and tokens_remaining is None:
+            # No hint at all: assume the 5-hour subscription cap rather than
+            # burning retries against it (the conservative reading).
+            is_cap = True
         kind = ErrorKind.SUBSCRIPTION_CAP if is_cap else ErrorKind.TRANSIENT_THROTTLE
         return ClassifiedError(
             kind=kind,

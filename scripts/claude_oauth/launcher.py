@@ -87,6 +87,14 @@ class ClaudeOAuthBridge:
             "GOKU_CC_BRIDGE_SECRET"
         ) or secrets.token_urlsafe(24)
         self._proc: subprocess.Popen | None = None
+        # The child's stdout/stderr go to a log FILE, never a pipe: a pipe
+        # nobody drains fills after ~64 KiB of uvicorn access-log lines and
+        # blocks the bridge's event loop mid-run.
+        log_dir = Path(os.environ.get("WCB_CC_BRIDGE_LOG_DIR",
+                                      Path.home() / ".cache" / "wildclawbench" / "bridge-logs"))
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.log_path = log_dir / f"bridge-{self.port}-{os.getpid()}.log"
+        self._log_fh = None
 
     @property
     def stub_api_key(self) -> str:
@@ -147,17 +155,34 @@ class ClaudeOAuthBridge:
         except OSError:
             return  # port is free
         logger.warning("Port %d is already in use — killing stale process", self.port)
-        result = subprocess.run(
-            ["lsof", "-ti", f"tcp:{self.port}"],
-            capture_output=True, text=True, timeout=5,
-        )
-        for pid_str in result.stdout.strip().split():
-            pid = int(pid_str)
+        try:
+            result = subprocess.run(
+                ["lsof", "-ti", f"tcp:{self.port}"],
+                capture_output=True, text=True, timeout=5,
+            )
+            pids = [int(p) for p in result.stdout.strip().split()]
+        except (FileNotFoundError, subprocess.SubprocessError, ValueError) as e:
+            raise RuntimeError(
+                f"Port {self.port} is in use and the holder could not be identified "
+                f"(lsof unavailable: {e}). Pick another port with --cc-bridge-port.") from e
+        for pid in pids:
             if pid == os.getpid():
                 continue
             logger.warning("Killing stale PID %d on port %d", pid, self.port)
-            os.kill(pid, 15)  # SIGTERM
-        time.sleep(0.5)
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(pid, 15)  # SIGTERM
+        # uvicorn's graceful shutdown can take a few seconds; poll until the
+        # port is actually free instead of sleeping a fixed 0.5 s.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            try:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    s.settimeout(0.5)
+                    s.connect((self.host, self.port))
+            except OSError:
+                return
+            time.sleep(0.3)
+        raise RuntimeError(f"Port {self.port} still in use after killing its holder")
 
     def start(self) -> "ClaudeOAuthBridge":
         self.preflight()
@@ -168,6 +193,7 @@ class ClaudeOAuthBridge:
             self.base_url,
             self.container_base_url,
         )
+        self._log_fh = open(self.log_path, "ab", buffering=0)
         self._proc = subprocess.Popen(
             [
                 sys.executable,
@@ -179,15 +205,25 @@ class ClaudeOAuthBridge:
                 str(self.port),
                 "--log-level",
                 self.log_level,
+                "--parent-pid",
+                str(os.getpid()),
             ],
             cwd=str(_repo_root()),
             env=env,
-            stdout=subprocess.PIPE,
+            stdout=self._log_fh,
             stderr=subprocess.STDOUT,
             text=True,
         )
+        logger.info("Bridge log: %s", self.log_path)
         self._await_ready()
         return self
+
+    def _log_tail(self, max_bytes: int = 4000) -> str:
+        try:
+            data = self.log_path.read_bytes()
+        except OSError:
+            return ""
+        return data[-max_bytes:].decode("utf-8", "replace")
 
     def _await_ready(self) -> None:
         deadline = time.monotonic() + self.startup_timeout
@@ -195,7 +231,7 @@ class ClaudeOAuthBridge:
         last_err: Exception | None = None
         while time.monotonic() < deadline:
             if self._proc and self._proc.poll() is not None:
-                out = self._proc.stdout.read() if self._proc.stdout else ""
+                out = self._log_tail()
                 raise RuntimeError(
                     f"Claude Code OAuth bridge exited during startup "
                     f"(code {self._proc.returncode}):\n{out}"
@@ -206,7 +242,7 @@ class ClaudeOAuthBridge:
                     # Verify it's OUR process that responded, not a stale one
                     time.sleep(0.2)
                     if self._proc and self._proc.poll() is not None:
-                        out = self._proc.stdout.read() if self._proc.stdout else ""
+                        out = self._log_tail()
                         raise RuntimeError(
                             f"Bridge subprocess died after health check passed "
                             f"(stale bridge on port {self.port}?):\n{out}"
@@ -226,16 +262,21 @@ class ClaudeOAuthBridge:
         if self._proc is None:
             return
         proc, self._proc = self._proc, None
-        if proc.poll() is not None:
-            return
-        proc.terminate()
         try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            with contextlib.suppress(Exception):
-                proc.wait(timeout=5)
-        logger.info("Claude Code OAuth bridge stopped")
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    with contextlib.suppress(Exception):
+                        proc.wait(timeout=5)
+                logger.info("Claude Code OAuth bridge stopped")
+        finally:
+            if self._log_fh is not None:
+                with contextlib.suppress(Exception):
+                    self._log_fh.close()
+                self._log_fh = None
 
     def __enter__(self) -> "ClaudeOAuthBridge":
         return self.start()

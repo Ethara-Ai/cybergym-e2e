@@ -1,3 +1,6 @@
+# DEPRECATED: legacy runner. Scores on a binary scale, writes no reward/ctrf/
+# rubric files, applies no network lockdown and pins no platform. Use
+# run_harbor.py for anything you intend to report.
 import time
 import sys
 from pathlib import Path

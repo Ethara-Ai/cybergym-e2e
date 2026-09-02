@@ -100,7 +100,8 @@ validate_task() {
     # Run validation
     local output
     local exit_code=0
-    output=$(python3 "$SCRIPT_DIR/dataset_validate.py" "$task" 2>&1 | tee "$log_file") || exit_code=$?
+    # pipefail inside the subshell: without it $? is tee's status, not python's.
+    output=$(set -o pipefail; python3 "$SCRIPT_DIR/dataset_validate.py" "$task" 2>&1 | tee "$log_file") || exit_code=$?
 
     # Check for success in output - check if all stages are 'passed'
     if grep -q "'stage1': 'passed'" "$log_file" && \
@@ -129,7 +130,7 @@ echo ""
 START_TIME=$(date +%s)
 
 # Run with || true to ensure we continue to summary even if tasks fail
-cat "$TASKS_FILE" | xargs -P "$MAX_PARALLEL" -I {} bash -c 'validate_task "$@"' _ {} || true
+grep -vE '^[[:space:]]*(#|$)' "$TASKS_FILE" | xargs -P "$MAX_PARALLEL" -I {} bash -c 'validate_task "$@"' _ {} || true
 
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))

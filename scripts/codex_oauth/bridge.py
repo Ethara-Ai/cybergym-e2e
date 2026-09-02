@@ -27,10 +27,10 @@ Required upstream headers (all verified):
 Point your client at it::
 
     export OPENAI_BASE_URL=http://127.0.0.1:8788      # litellm / openai SDK honor this
-    export OPENAI_API_KEY=$GOKU_CODEX_BRIDGE_SECRET   # stub; bridge substitutes OAuth
+    export OPENAI_API_KEY=$KAKASHI_CODEX_BRIDGE_SECRET   # stub; bridge substitutes OAuth
     # model: openai/gpt-5.5  (Responses mode)
 
-Security: set GOKU_CODEX_BRIDGE_SECRET and give clients the same value as
+Security: set KAKASHI_CODEX_BRIDGE_SECRET and give clients the same value as
 OPENAI_API_KEY; otherwise the bridge is unauthenticated and any local process can
 spend the subscription.
 """
@@ -96,7 +96,7 @@ def _force_store_false() -> bool:
 
 
 def _bridge_secret() -> str:
-    return os.environ.get("GOKU_CODEX_BRIDGE_SECRET", "").strip()
+    return os.environ.get("KAKASHI_CODEX_BRIDGE_SECRET", "").strip()
 
 
 # A standalone SSE comment line. SSE parsers (and litellm's Responses-API stream
@@ -346,7 +346,7 @@ def build_app(provider=None) -> FastAPI:
 
     if not _bridge_secret():
         _LOG.warning(
-            "GOKU_CODEX_BRIDGE_SECRET is not set — the bridge is UNAUTHENTICATED; "
+            "KAKASHI_CODEX_BRIDGE_SECRET is not set — the bridge is UNAUTHENTICATED; "
             "any local process can spend this subscription. Set it (and point "
             "clients' OPENAI_API_KEY at the same value) to lock it down."
         )
