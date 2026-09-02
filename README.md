@@ -171,6 +171,7 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `JUDGE_PROVIDER` | Judge transport: `anthropic` or `codex`; default `anthropic` |
 | `JUDGE_FALLBACK_PROVIDER` | Second provider tried when the primary cannot reach `JUDGE_MIN_TRIALS`; default unset (no fallback; must differ from `JUDGE_PROVIDER`) |
 | `JUDGE_MAX_RETRIES` | Transport retries per judge call (backoff + jitter, honours `Retry-After`); default `4` |
+| `JUDGE_TEMPERATURE` | Unset by default: `claude-opus-4-8` and the Claude 5 family reject `temperature` with HTTP 400, so the judge runs at the model default and relies on 11 trials + lower median. Set only for a model that accepts it |
 | `JUDGE_COST_ESTIMATION` | Set `0` on subscription-served runs to suppress list-price cost lines; unpriced models always report `0.0` with `cost_known: false` |
 | `JUDGE_MODEL` | Judge model; default per provider (`claude-opus-4-8` / `gpt-5.6-sol`) |
 | `JUDGE_TRIALS` | Judge trials per evaluation; default `11` |
@@ -238,6 +239,25 @@ scripts/judge.py         CLI for re-judging a trajectory that already exists
 scripts/codex_oauth/     OAuth bridge for judging through a ChatGPT subscription
 run_harbor.py            imports judge_lib for the scoring pass
 ```
+
+### Sampling temperature (read this before comparing runs)
+
+Nothing in this harness runs at temperature 0, and on the default models it
+cannot:
+
+- **Agent.** The Claude Code CLI has no temperature setting and sends none; the
+  model's default applies. This is the same as any interactive Claude Code
+  session.
+- **Judge.** `claude-opus-4-8` (the default judge) and the Claude 5 family
+  reject `temperature` outright with HTTP 400, verified live. The judge
+  therefore sends none. `JUDGE_TEMPERATURE` exists for models that still
+  accept it (e.g. `claude-haiku-4-5`), but pinning it there does not make the
+  agent deterministic either.
+
+Consequences: a single run is one sample. Compare tasks and models with
+repeated runs (pass@k), and read `rubric_score.json`'s `trial_scores`,
+`perturbation_stdev` and `conformal_interval` as the judge's noise floor, not
+as decoration.
 
 ### How the judge works
 
@@ -377,12 +397,16 @@ Codex with a ChatGPT account"*. The codex default is therefore `gpt-5.6-sol`.
 Override per run with `JUDGE_MODEL_CODEX`. To see what a logged-in account can
 use, read `~/.codex/models_cache.json`.
 
-**Reasoning and the calibration call.** The Codex reasoning models fold reasoning
-tokens into the completion budget, so the diagnostic calibration call uses an
-8192-token cap (`calibration_call` in `judge_lib.py`); at the old 4096 it
-intermittently truncated the predictions JSON and dropped the calibration for
-that attempt (`calibration.json` is skipped, never partial). The rubric score is
-unaffected — it uses its own budget.
+**Codex truncation (`no JSON array in reply`).** A Codex judge intermittently
+returns an incomplete or non-array reply for both the rubric and the calibration
+call. This is **not** a token-cap the harness can raise: the bridge strips
+`max_tokens` (chat `max_tokens` -> `max_output_tokens`, then dropped as an
+unsupported param), so the backend's own output limit applies and the request's
+cap is ignored. The defenses are the built-in single re-ask per call and the
+trial count — a run can lose several trials and still reach `JUDGE_MIN_TRIALS`
+(e.g. `4/11 succeeded`). A calibration call that never returns an array simply
+skips `calibration.json` for that attempt (never partial). If codex truncation
+costs too many trials, raise `JUDGE_TRIALS` or judge that run on `anthropic`.
 
 ### Judging through a ChatGPT subscription
 

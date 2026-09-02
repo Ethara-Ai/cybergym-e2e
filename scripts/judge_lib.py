@@ -287,12 +287,24 @@ def build_body(provider, model, prefix, suffix, max_tokens=8192):
         content.append(block)
     if suffix:
         content.append({"type": "text", "text": suffix})
-    return {
+    body = {
         "model": model,
         "max_tokens": max_tokens,
-        "temperature": 0.0,
         "messages": [{"role": "user", "content": content}],
     }
+    # temperature is NOT sent by default: claude-opus-4-8 and the Claude 5
+    # family reject it with HTTP 400 ("`temperature` is deprecated for this
+    # model"), which would fail every trial on the direct-API path (the OAuth
+    # bridge happened to strip it).  The judge therefore runs at the model's
+    # default temperature, and its 11 shuffled trials + lower median exist to
+    # absorb that.  JUDGE_TEMPERATURE=<float> opts in for models that accept it.
+    temp = env_default("JUDGE_TEMPERATURE", None)
+    if temp is not None:
+        try:
+            body["temperature"] = float(temp)
+        except ValueError:
+            print(f"  Warning: JUDGE_TEMPERATURE={temp!r} is not a number; ignored")
+    return body
 
 
 def extract_text_and_usage(provider, resp):
@@ -1029,9 +1041,12 @@ def calibration_call(provider, url, headers, judge_model, pytest_criteria, traj_
     prompt = build_calibration_prompt(pytest_criteria, traj_text, traj_meta)
     # Single call: no cacheable prefix (build_body emits one plain text block
     # and no cache_control when the prefix is empty).
-    # 8192 (not 4096): the codex reasoning models fold reasoning tokens into the
-    # completion budget, so a 4096 cap intermittently truncates the predictions
-    # JSON array mid-output -> "no JSON array in reply". Headroom keeps it whole.
+    # 8192 is the completion cap for the predictions JSON on the anthropic
+    # transport. The codex bridge STRIPS this (chat max_tokens -> max_output_tokens,
+    # then dropped as an unsupported param), so a codex judge ignores it entirely
+    # and the backend's own output limit applies; codex's intermittent
+    # "no JSON array in reply" is absorbed by the re-ask retry and the trial count,
+    # not by this number.
     body = build_body(provider, judge_model, "", prompt, max_tokens=8192)
     try:
         resp = post_json_with_retry(url, headers, body, label="Calibration judge")
