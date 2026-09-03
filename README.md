@@ -130,6 +130,12 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
     --cc-bridge-secret my-secret
 ```
 
+```bash
+# GLM (Z.ai) through the host-side GLM bridge; needs ZAI_API_KEY in .env or the env
+python run_harbor.py tasks/harfbuzz__arvo_62774 \
+    --model-provider glm --glm-model-id glm-5.3 --cc-bridge-port 3457
+```
+
 **Options:**
 
 | Flag | Default | Description |
@@ -137,15 +143,16 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `task_dir` | (required) | Path to Harbor task directory |
 | `--timeout` | `5400` | Agent timeout in seconds |
 | `--max-attempts` | `1` | Number of attempts (with feedback between attempts) |
-| `--model-provider` | `anthropic` | LLM provider: `anthropic` or `bedrock` |
-| `--anthropic-model-id` | `claude-opus-4-8` | Anthropic model ID |
+| `--model-provider` | `anthropic` | LLM provider: `anthropic`, `bedrock` or `glm` (Z.ai via the host-side GLM bridge) |
+| `--anthropic-model-id` | `claude-opus-5` | Anthropic model ID for the agent |
 | `--bedrock-model-id` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID |
+| `--glm-model-id` | `glm-5.3` | GLM model ID for `--model-provider glm` |
 | `--aws-region` | `us-west-2` | AWS region for Bedrock |
 | `--output-dir` | `agent_output/<task>/<timestamp>_e2e` | Custom output directory |
 | `--evidence-dir` | `evidence/<task>/<timestamp>_e2e` | Where agent evidence (`crash.log`) is collected, outside `agent_output/` |
 | `--claude-subscription` | off | Route through the Claude Code OAuth bridge using your Max/Pro subscription (forces `--model-provider anthropic`) |
-| `--cc-bridge-port` | ephemeral | Fixed host port for the OAuth bridge |
-| `--cc-bridge-secret` | random | Pin the bridge shared secret (default: random per run) |
+| `--cc-bridge-port` | ephemeral | Fixed host port for the host-side bridge (Claude subscription or GLM) |
+| `--cc-bridge-secret` | random | Pin the host-side bridge shared secret (default: random per run) |
 | `--no-judge` | off | Skip the rubric judge and calibration. Reward = `pytest_score` alone; every score file and `summary.json` carry `scoring: pytest_only`, so the number cannot be mistaken for a judged one. Use for verifier smoke tests |
 | `--shared-network` | off | Keep the agent container on the default Docker bridge instead of an `--internal` network with a one-port relay (weaker isolation; flagged `isolated_network: false`) |
 | `--no-lockdown` | off | Do not firewall the agent container (flagged in `summary.json`; the run is not trustworthy). Debugging only |
@@ -164,16 +171,22 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `AWS_SECRET_ACCESS_KEY` | AWS credentials for Bedrock |
 | `AWS_SESSION_TOKEN` | AWS session token for Bedrock |
 | `AWS_BEARER_TOKEN_BEDROCK` | Bearer token for Bedrock |
-| `MODEL_PROVIDER` | Agent provider; default `anthropic` |
-| `ANTHROPIC_MODEL_ID` | Agent model; default `claude-opus-4-8` |
+| `MODEL_PROVIDER` | Agent provider; default `anthropic` (`anthropic`, `bedrock`, `glm`) |
+| `ANTHROPIC_MODEL_ID` | Agent model; default `claude-opus-5` |
 | `BEDROCK_MODEL_ID` | Bedrock model id |
 | `AWS_REGION` | AWS region; default `us-west-2` |
-| `JUDGE_PROVIDER` | Judge transport: `anthropic` or `codex`; default `anthropic` |
-| `JUDGE_FALLBACK_PROVIDER` | Second provider tried when the primary cannot reach `JUDGE_MIN_TRIALS`; default unset (no fallback; must differ from `JUDGE_PROVIDER`) |
+| `ZAI_API_KEY` | Z.ai key for `--model-provider glm` (also read: `GLM_API_KEY`, `ZHIPU_API_KEY`, `GLM_API_KEY_FILE`, `~/.config/zai/api_key`). Stays on the host |
+| `GLM_MODEL_ID` | GLM agent model; default `glm-5.3` |
+| `GLM_SMALL_MODEL_ID` | GLM model the bridge substitutes for the CLI's `claude-*haiku*` background calls; default `glm-5.3-flash` |
+| `GLM_UPSTREAM` | Z.ai Anthropic-compatible endpoint; default `https://api.z.ai/api/anthropic` (mainland: `https://open.bigmodel.cn/api/anthropic`) |
+| `KAKASHI_GLM_BRIDGE_SECRET` | Shared secret for a manually started `glm_bridge` (the runner generates one per run) |
+| `JUDGE_PROVIDER` | `codex` only (default). The rubric judge never uses an Anthropic model; the local codex bridge is checked at startup |
 | `JUDGE_MAX_RETRIES` | Transport retries per judge call (backoff + jitter, honours `Retry-After`); default `4` |
-| `JUDGE_TEMPERATURE` | Unset by default: `claude-opus-4-8` and the Claude 5 family reject `temperature` with HTTP 400, so the judge runs at the model default and relies on 11 trials + lower median. Set only for a model that accepts it |
+| `JUDGE_TEMPERATURE` | Unset by default: the Claude 5 family (and opus-4-8) reject `temperature` with HTTP 400, so the judge runs at the model default and relies on 11 trials + lower median. Set only for a model that accepts it |
 | `JUDGE_COST_ESTIMATION` | Set `0` on subscription-served runs to suppress list-price cost lines; unpriced models always report `0.0` with `cost_known: false` |
-| `JUDGE_MODEL` | Judge model; default per provider (`claude-opus-4-8` / `gpt-5.6-sol`) |
+| `JUDGE_MODEL` | Judge (rubric) model; default `gpt-5.6-sol`. A ChatGPT-backed Codex account rejects `-codex`-suffixed ids; see `~/.codex/models_cache.json` for what it accepts |
+| `JUDGE_CALIBRATION_MODEL` | Model for the calibration call only; default = the rubric model. Set to a model that reliably returns the predictions array (`gpt-5.6-sol` reasons then emits `[]` on this prompt, so use e.g. `gpt-5.5`) |
+| `JUDGE_CALIBRATION_RETRIES` | Times the calibration call is re-tried until the reply maps to a real test; default `6` (absorbs the codex empty-array reply) |
 | `JUDGE_TRIALS` | Judge trials per evaluation; default `11` |
 | `JUDGE_TOOL_RESULT_CAP` / `JUDGE_TOOL_INPUT_CAP` | Optional per-block head+tail clip for tool results / inputs in the judge prompt; default `0` (send in full) |
 | `JUDGE_MAX_TRAJ_CHARS` | Ceiling on trajectory chars per judge call, guard against API rejection only; default `1500000` |
@@ -203,6 +216,41 @@ The agent has passwordless `sudo` (build scripts need root), so the rules alone 
 
 The lockdown is applied automatically after Claude Code is installed. The verifier container retains full network access because some tasks require downloading build dependencies during compilation.
 
+### Model reasoning ("thinking") in trajectories
+
+The Claude 5 family (and Opus 4.8/4.7) default to `display: "omitted"`, and the
+`claude` CLI asks for exactly that, so without intervention every thinking block
+in `agent.jsonl` is an empty string plus a signature, and the judge grades a
+trajectory with no reasoning in it. The bridge therefore rewrites the outgoing
+`thinking` parameter to `{"type": "adaptive", "display": "summarized"}` (a caller
+that sends `type: "disabled"` is left alone). Measured live on `claude-opus-5`:
+`adaptive+omitted` and `enabled+summarized` return 0 characters; only
+`adaptive+summarized` returns text. Knobs: `WCB_CC_THINKING_DISPLAY`
+(`summarized` | `omitted`, default `summarized`) and `WCB_CC_THINKING_TYPE`
+(`adaptive` | `enabled`, default `adaptive`).
+
+What that text is, stated carefully: it is Anthropic's server-side **summary** of
+the model's reasoning, produced by a separate summarizer model, copied verbatim
+into the trajectory. It is not the raw chain of thought, and the block signature
+authenticates the block's origin, not the summary text. Billing is for the full
+thinking tokens. Never back-fill or synthesise thoughts.
+
+Check any run with:
+
+```bash
+python3 - <<'PY'
+import json,glob,sys
+n=t=0
+for line in open(glob.glob("agent_output/<task>/<run>/trajectory/agent.jsonl")[0]):
+    try: e=json.loads(line)
+    except Exception: continue
+    for b in (e.get("message",{}) or {}).get("content") or []:
+        if isinstance(b,dict) and b.get("type")=="thinking":
+            n+=1; t+=bool((b.get("thinking") or "").strip())
+print(f"{t}/{n} thinking blocks carry text")
+PY
+```
+
 ### Claude Max/Pro Subscription Mode
 
 The `--claude-subscription` flag auto-starts the Claude Code OAuth bridge (`scripts/claude_oauth`), a local proxy that routes Anthropic API requests through your Claude Max/Pro subscription instead of a metered API key. This is useful for running evaluations without API billing.
@@ -220,6 +268,45 @@ The `--claude-subscription` flag auto-starts the Claude Code OAuth bridge (`scri
 
 The bridge automatically kills any stale bridge process on the same port from a previous run.
 
+### GLM (Z.ai) Bridge Mode
+
+`--model-provider glm` runs the same in-container Claude Code agent against a
+GLM model. It auto-starts `scripts/glm_bridge`, an Anthropic-compatible proxy on
+the host that forwards `/v1/messages` to Z.ai's Anthropic endpoint
+(`https://api.z.ai/api/anthropic`, the one the GLM Coding Plan documents for
+Claude Code) with the host's `ZAI_API_KEY`. The container only ever sees the
+bridge address and a per-run stub key, so the credential path and the one-port
+network lockdown are identical to a `--claude-subscription` run.
+
+**Prerequisites:**
+- `ZAI_API_KEY` in `.env` or the environment (a Coding Plan key or a pay-as-you-go key)
+- Bridge dependencies: `bash scripts/install_bridge_deps.sh` (same three packages as the Claude bridge)
+
+**How it works:**
+1. `run_harbor.py` starts `python -m glm_bridge` on `127.0.0.1:<port>` and waits for `/healthz`
+2. `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are pointed at the bridge; `ANTHROPIC_MODEL` and the `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` aliases carry the GLM ids into the container
+3. The bridge rewrites any remaining `claude-*` model id to `GLM_MODEL_ID` (`*haiku*` to `GLM_SMALL_MODEL_ID`), swaps the stub key for the real one, and streams the SSE reply back verbatim with a keep-alive comment during long reasoning pauses
+4. `summary.json` records `model_provider: glm` and the GLM id in `model`
+
+```bash
+# Verify the key loads (run from scripts/)
+ZAI_API_KEY=... python -m glm_bridge --check
+
+# Offline self-test of the proxy (auth, model mapping, streaming, errors)
+python -m glm_bridge.selftest
+
+# Run the bridge by hand, e.g. for other clients
+export KAKASHI_GLM_BRIDGE_SECRET=$(uuidgen)
+python -m glm_bridge --host 127.0.0.1 --port 8790 &
+export ANTHROPIC_BASE_URL=http://127.0.0.1:8790 ANTHROPIC_API_KEY=$KAKASHI_GLM_BRIDGE_SECRET
+```
+
+**Caveats.** GLM models are unpriced in `MODEL_PRICING`, so a run terminated
+before the CLI's `result` event reports `total_cost_usd: 0.0` with
+`cost_known: false`; add a `FINANCE_PRICING_JSON` entry if a cost line matters.
+The rubric judge is unaffected (it stays Codex-only). `--claude-subscription`
+and `--model-provider glm` are mutually exclusive.
+
 ## Rubric Judging
 
 Every run is scored twice and the two are averaged:
@@ -235,8 +322,10 @@ runner:
 
 ```
 scripts/judge_lib.py     the judge: prompts, transports, scoring, anomalies
-scripts/judge.py         CLI for re-judging a trajectory that already exists
+scripts/judge.py         CLI for re-judging a trajectory (writes rubric_score.json only)
+scripts/rejudge_sync.py  after a re-judge: re-derive reward files + calibration in place
 scripts/codex_oauth/     OAuth bridge for judging through a ChatGPT subscription
+scripts/glm_bridge/      host-side bridge that runs the agent on a GLM (Z.ai) model
 run_harbor.py            imports judge_lib for the scoring pass
 ```
 
@@ -248,9 +337,9 @@ cannot:
 - **Agent.** The Claude Code CLI has no temperature setting and sends none; the
   model's default applies. This is the same as any interactive Claude Code
   session.
-- **Judge.** `claude-opus-4-8` (the default judge) and the Claude 5 family
-  reject `temperature` outright with HTTP 400, verified live. The judge
-  therefore sends none. `JUDGE_TEMPERATURE` exists for models that still
+- **Judge.** The Claude 5 family (and opus-4-8) reject `temperature` outright
+  with HTTP 400, verified live, so the anthropic transport sends none; the codex
+  bridge drops it too. `JUDGE_TEMPERATURE` exists for models that still
   accept it (e.g. `claude-haiku-4-5`), but pinning it there does not make the
   agent deterministic either.
 
@@ -360,13 +449,14 @@ trusting it.
 
 ### Judge providers
 
-Two transports sit behind one interface. Prompt construction, verdict parsing,
-scoring, clamping, anomaly capture and the canonical re-sort are shared, so
-switching provider cannot change *how* a verdict is scored — only who produced it.
+The rubric judge is **Codex-only**: it never runs on an Anthropic model, so the
+judge cannot share a provider with the agent under test. `JUDGE_PROVIDER` and
+`JUDGE_FALLBACK_PROVIDER` accept only `codex`; anything else is rejected at
+startup. Prompt construction, verdict parsing, scoring, clamping, anomaly
+capture and the canonical re-sort live in `scripts/judge_lib.py`.
 
 | provider | endpoint | auth | default model |
 |----------|----------|------|---------------|
-| `anthropic` | `<base>/v1/messages` | `ANTHROPIC_API_KEY` / bridge | `claude-opus-4-8` |
 | `codex` | `<base>/v1/chat/completions` | `KAKASHI_CODEX_BRIDGE_SECRET` | `gpt-5.6-sol` |
 
 Usage accounting is normalised to the Anthropic key names at the transport
@@ -376,10 +466,10 @@ boundary (`input_tokens`, `output_tokens`, `cache_read_input_tokens`,
 `rubric_score.json` records `judge_provider` (who answered) and
 `judge_provider_requested` (who was asked).
 
-**Fallback.** If the primary provider cannot produce `JUDGE_MIN_TRIALS` usable
-trials, `JUDGE_FALLBACK_PROVIDER` (if set to a *different* provider) is tried
-before giving up. Each judge call also retries transport failures and 429/5xx
-with backoff. If the judge is still unavailable the reward formula does **not**
+**Unavailable judge.** There is no fallback provider: the judge is Codex-only.
+Each judge call retries transport failures and 429/5xx with backoff, and the
+runner checks the codex bridge before the agent starts. If the judge still
+cannot produce `JUDGE_MIN_TRIALS` usable trials the reward formula does **not**
 change: the attempt scores `(pytest_score + 0) / 2`, is flagged
 `judge_available: false` in `reward.json` / `summary.json`, and prints a banner.
 Re-run such attempts once the judge is reachable rather than comparing them.
@@ -397,16 +487,24 @@ Codex with a ChatGPT account"*. The codex default is therefore `gpt-5.6-sol`.
 Override per run with `JUDGE_MODEL_CODEX`. To see what a logged-in account can
 use, read `~/.codex/models_cache.json`.
 
-**Codex truncation (`no JSON array in reply`).** A Codex judge intermittently
-returns an incomplete or non-array reply for both the rubric and the calibration
-call. This is **not** a token-cap the harness can raise: the bridge strips
-`max_tokens` (chat `max_tokens` -> `max_output_tokens`, then dropped as an
-unsupported param), so the backend's own output limit applies and the request's
-cap is ignored. The defenses are the built-in single re-ask per call and the
-trial count — a run can lose several trials and still reach `JUDGE_MIN_TRIALS`
-(e.g. `4/11 succeeded`). A calibration call that never returns an array simply
-skips `calibration.json` for that attempt (never partial). If codex truncation
-costs too many trials, raise `JUDGE_TRIALS` or judge that run on `anthropic`.
+**Codex empty replies (`no JSON array in reply`).** A Codex judge intermittently
+returns an empty array `[]` or empty content instead of predictions. This is
+**not** truncation and **not** a token-cap the harness can raise: the bridge
+strips `max_tokens`, and higher `reasoning.effort` does not help — the model
+reasons, then emits nothing. It is model-specific: `gpt-5.6-sol` does it on the
+single-shot calibration prompt (observed 6/6 empty on one task), while `gpt-5.5`
+and `gpt-5.4` return the full array reliably.
+
+Defenses, in order:
+- **Rubric call**: the built-in per-call re-ask plus the trial count. A run can
+  lose several trials and still reach `JUDGE_MIN_TRIALS` (e.g. `10/11 succeeded`).
+- **Calibration call**: it retries up to `JUDGE_CALIBRATION_RETRIES` (default 6)
+  until the reply maps to a real test, and the prompt now demands one object per
+  criterion with a `number` field. If the rubric model still won't comply, set
+  `JUDGE_CALIBRATION_MODEL` to one that does (e.g. `gpt-5.5`) — the rubric stays
+  on its own model. If every attempt fails, `calibration.json` is skipped (a
+  fresh `run_harbor` run) or, for a re-judge, `scripts/rejudge_sync.py` removes a
+  stale calibration from a different judge rather than leaving a mismatched file.
 
 ### Judging through a ChatGPT subscription
 
@@ -459,10 +557,29 @@ JUDGE_TRIALS=3 JUDGE_MODEL=claude-sonnet-4-6 \
     python scripts/judge.py <run_dir> -o /tmp/rubric.json --print-criteria
 ```
 
-**Use `-o`.** Without it the default target is
-`<run_dir>/verifier/rubric_score.json`, which overwrites the run's real score —
-and `summary.json` and `reward.json` are not recomputed, so the run would be left
-internally inconsistent.
+**Use `-o`, or follow with `rejudge_sync.py`.** `scripts/judge.py` writes **only**
+`rubric_score.json`. Without `-o` it overwrites `<run_dir>/verifier/rubric_score.json`
+in place, but `avg_score.json` / `reward.json` / `reward.txt` / `calibration.json`
+/ `summary.json` are **not** recomputed, so the run is left internally inconsistent
+(they still carry the previous judge's numbers). Two ways to handle it:
+
+- To just inspect a score without touching the run, write elsewhere: `-o /tmp/rubric.json`.
+- To re-judge a run **in place and keep every file consistent**, run the judge
+  (which updates `rubric_score.json`) then propagate:
+
+```bash
+RUN=agent_output/<task>/<timestamp>_e2e
+JUDGE_PROVIDER=codex python scripts/judge.py "$RUN"
+# re-derive reward files (avg = (pytest + rubric) / 2) and regenerate calibration:
+JUDGE_PROVIDER=codex JUDGE_CALIBRATION_MODEL=gpt-5.5 python scripts/rejudge_sync.py "$RUN"
+```
+
+`rejudge_sync.py` never re-runs the agent or the verifier — it reads the fresh
+`rubric_score.json` and the existing `pytest_score`/stages, rewrites the derived
+reward files and `summary.json`, and makes one calibration call (retried, on
+`JUDGE_CALIBRATION_MODEL` if set). It leaves `ctrf.json` / `test-stdout.txt`
+(verifier outputs) untouched. It accepts an absolute run-dir path, so it works on
+delivery/trajectory copies outside the repo as long as the task exists under `tasks/`.
 
 **Re-scoring verdicts made on clipped input.** Any `rubric_score.json` without a
 `trajectory` block was judged before the judge read the full run. Re-judging is
@@ -583,7 +700,7 @@ Contains all run metadata and detailed results:
 {
   "task": "harfbuzz__arvo_62774",
   "agent": "claude-code",
-  "model": "claude-opus-4-8",
+  "model": "claude-opus-5",
   "status": "success",
   "reward": 0.93,
   "pytest_score": 1.0,

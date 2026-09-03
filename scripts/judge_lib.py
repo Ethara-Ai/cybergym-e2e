@@ -43,17 +43,20 @@ except ImportError:
 
 # --- configuration ---------------------------------------------------------
 
-DEFAULT_JUDGE_PROVIDER = "anthropic"
+DEFAULT_JUDGE_PROVIDER = "codex"
 # Why the last evaluate_rubric() call returned None (for the caller's logs).
 LAST_JUDGE_FAILURE = None
 DEFAULT_JUDGE_TRIALS = 11
 DEFAULT_JUDGE_MIN_TRIALS = 3
 
 # Per-provider model default, used when JUDGE_MODEL is unset or blank.
+# The rubric judge is Codex-only: it must never share a provider with the
+# agent under test.  The anthropic transport below is kept for the
+# calibration/diagnostic tooling, but it is not a selectable judge provider.
 DEFAULT_JUDGE_MODELS = {
-    "anthropic": "claude-opus-4-8",
     "codex": "gpt-5.6-sol",
 }
+SUPPORTED_JUDGE_PROVIDERS = ("codex",)
 DEFAULT_CODEX_BRIDGE_URL = "http://127.0.0.1:8788"
 
 # USD per 1M tokens.  Reasoning tokens are billed as output, and the codex
@@ -86,7 +89,7 @@ _FAMILY_PRICING = (
     ("haiku",  MODEL_PRICING["claude-haiku-4-5"]),
 )
 # Kept for callers that import it; no longer used as a silent fallback.
-DEFAULT_PRICING_MODEL = "claude-opus-4-8"
+DEFAULT_PRICING_MODEL = "claude-opus-5"
 _UNPRICED_WARNED = set()
 
 
@@ -214,7 +217,7 @@ def judge_model_for(provider, primary=None):
         generic = env_default("JUDGE_MODEL", None)
         if generic:
             return generic
-    return DEFAULT_JUDGE_MODELS.get(provider, DEFAULT_JUDGE_MODELS["anthropic"])
+    return DEFAULT_JUDGE_MODELS.get(provider, DEFAULT_JUDGE_MODELS[DEFAULT_JUDGE_PROVIDER])
 
 
 # --- transport: the only provider-specific code --------------------------------
@@ -292,7 +295,7 @@ def build_body(provider, model, prefix, suffix, max_tokens=8192):
         "max_tokens": max_tokens,
         "messages": [{"role": "user", "content": content}],
     }
-    # temperature is NOT sent by default: claude-opus-4-8 and the Claude 5
+    # temperature is NOT sent by default: the Claude 5 family (and opus-4-8)
     # family reject it with HTTP 400 ("`temperature` is deprecated for this
     # model"), which would fail every trial on the direct-API path (the OAuth
     # bridge happened to strip it).  The judge therefore runs at the model's
@@ -774,8 +777,8 @@ def rubric_trial(provider, url, headers, judge_model, rubric, traj_text,
     # transport layer separately retries failures with backoff.
     for ask in (1, 2):
         if ask == 2:
-            # Same request at temperature 0 would return the same prose; add an
-            # explicit format demand so the re-ask can actually differ.
+            # Re-sending the identical request would likely draw the same prose;
+            # add an explicit format demand so the re-ask can actually differ.
             body = build_body(provider, judge_model, prefix,
                               suffix + "\n\nYour previous reply contained no JSON array. "
                                        "Respond with ONLY the JSON array, no prose.")
@@ -842,9 +845,53 @@ def _run_trials(provider, rubric, traj_text, llm_env, num_trials, primary=None,
     return judge_model, results
 
 
+def judge_endpoint_reachable(llm_env=None, timeout=5.0):
+    """(ok, detail) for the judge endpoint the current config resolves to.
+
+    The codex transport is a local bridge that nothing starts automatically,
+    so a run must find out BEFORE the agent phase that it is down -- not after
+    an hour of agent time, when 11 trials 401/ECONNREFUSED and the rubric is
+    lost.  Anthropic direct/bridge endpoints are checked with a cheap GET.
+    """
+    provider = env_default("JUDGE_PROVIDER", DEFAULT_JUDGE_PROVIDER).lower()
+    if provider not in DEFAULT_JUDGE_MODELS:
+        provider = DEFAULT_JUDGE_PROVIDER
+    url, _headers = resolve_endpoint(provider, llm_env or {})
+    base = url.rsplit("/v1/", 1)[0]
+    probe = f"{base}/healthz" if provider == "codex" else base
+    try:
+        if HAS_HTTPX:
+            r = httpx.get(probe, timeout=timeout)
+            code = r.status_code
+        else:
+            import urllib.request
+            import urllib.error
+            try:
+                with urllib.request.urlopen(probe, timeout=timeout) as resp:
+                    code = resp.status
+            except urllib.error.HTTPError as e:
+                code = e.code
+    except Exception as e:  # noqa: BLE001
+        return False, f"{provider} judge endpoint {probe} unreachable: {type(e).__name__}: {e}"
+    if provider == "codex" and code >= 400:
+        return False, f"codex bridge at {probe} answered HTTP {code}"
+    return True, f"{provider}:{judge_model_for(provider, provider)} via {base}"
+
+
 def validate_judge_config():
-    """Raise ValueError on an unusable JUDGE_TRIALS / JUDGE_MIN_TRIALS pair.
+    """Raise ValueError on an unusable judge configuration.
     Call at startup so a misconfiguration fails before anything is spent."""
+    provider = env_default("JUDGE_PROVIDER", DEFAULT_JUDGE_PROVIDER).lower()
+    if provider not in SUPPORTED_JUDGE_PROVIDERS:
+        raise ValueError(
+            f"JUDGE_PROVIDER={provider!r}: the rubric judge is Codex-only "
+            f"(supported: {', '.join(SUPPORTED_JUDGE_PROVIDERS)}); the judge never uses an "
+            f"Anthropic model. Unset JUDGE_PROVIDER or pass --no-judge.")
+    fallback = env_default("JUDGE_FALLBACK_PROVIDER", "").lower()
+    if fallback and fallback not in SUPPORTED_JUDGE_PROVIDERS:
+        raise ValueError(
+            f"JUDGE_FALLBACK_PROVIDER={fallback!r} is not a supported judge provider "
+            f"(supported: {', '.join(SUPPORTED_JUDGE_PROVIDERS)})")
     num_trials = env_default_int("JUDGE_TRIALS", DEFAULT_JUDGE_TRIALS)
     min_trials = env_default_int("JUDGE_MIN_TRIALS", DEFAULT_JUDGE_MIN_TRIALS)
     if num_trials < 1 or min_trials < 1 or min_trials > num_trials:
@@ -887,9 +934,7 @@ def evaluate_rubric(task_dir, trajectory_log, llm_env=None, model=None):
     num_trials, min_trials = validate_judge_config()
     primary = env_default("JUDGE_PROVIDER", DEFAULT_JUDGE_PROVIDER).lower()
     if primary not in DEFAULT_JUDGE_MODELS:
-        print(f"  Warning: unknown JUDGE_PROVIDER={primary!r}; "
-              f"using {DEFAULT_JUDGE_PROVIDER}")
-        primary = DEFAULT_JUDGE_PROVIDER
+        raise ValueError(f"JUDGE_PROVIDER={primary!r}: the rubric judge is Codex-only")
 
     # A fallback only exists when it names a DIFFERENT provider.  The old
     # default ("anthropic") equalled the primary, so there never was one.
@@ -1026,8 +1071,8 @@ AGENT TRAJECTORY:
 
 TEST CRITERIA (predict pass/fail for each):
 {criteria_text}
-For each criterion, respond with a JSON array. Each element must have:
-- "number": the criterion ID (e.g. "P1")
+Respond with a JSON array containing exactly one object for EACH of the {len(pytest_criteria)} criteria above (do NOT return an empty array or omit any criterion). Each element must have:
+- "number": the criterion ID (e.g. "P1") -- REQUIRED on every element
 - "predicted_pass": true if you predict this test passed, false otherwise
 - "confidence": "high", "medium", or "low"
 - "reasoning": one sentence explaining your prediction
@@ -1083,7 +1128,12 @@ def evaluate_judge_calibration(task_dir, trajectory_log, test_results, llm_env=N
     provider = env_default("JUDGE_PROVIDER", DEFAULT_JUDGE_PROVIDER).lower()
     if provider not in DEFAULT_JUDGE_MODELS:
         provider = DEFAULT_JUDGE_PROVIDER
-    judge_model = judge_model_for(provider, provider)
+    # The calibration call may use a different model from the rubric: some models
+    # follow the rubric contract yet return an empty array for this single-shot
+    # predict-all-criteria prompt (observed with gpt-5.6-sol, which reasons then
+    # emits `[]`). JUDGE_CALIBRATION_MODEL points calibration at a model that
+    # complies (e.g. gpt-5.5) without changing the rubric model.
+    judge_model = env_default("JUDGE_CALIBRATION_MODEL", None) or judge_model_for(provider, provider)
     url, headers = resolve_endpoint(provider, llm_env)
 
     # Build P-number -> test-name mapping dynamically from test_weights.json
@@ -1103,11 +1153,27 @@ def evaluate_judge_calibration(task_dir, trajectory_log, test_results, llm_env=N
     test_name_map = dict(zip(p_numbers_ordered, test_names_ordered))
     polarity_map = {c["number"]: c.get("is_positive", True) for c in pytest_criteria}
 
+    # A codex/reasoning judge intermittently returns an empty array (it reasons,
+    # then emits `[]` or nothing) for this single-shot call. Retry until the reply
+    # maps to at least one real test. The anthropic judge succeeds on the first
+    # attempt, so this adds no cost there.
+    retries = max(1, env_default_int("JUDGE_CALIBRATION_RETRIES", 6))
     print(f"  Judge calibration [{provider}:{judge_model}]: predicting pytest outcomes...")
-    result = calibration_call(provider, url, headers, judge_model, pytest_criteria, traj_text,
-                              traj_meta)
-    if not result:
-        print("  Judge calibration: failed")
+    result = None
+    mapped = 0
+    for attempt in range(1, retries + 1):
+        result = calibration_call(provider, url, headers, judge_model, pytest_criteria,
+                                  traj_text, traj_meta)
+        preds = (result or {}).get("predictions") or []
+        mapped = sum(1 for p in preds if isinstance(p, dict)
+                     and test_name_map.get(p.get("number")) in test_results)
+        if mapped > 0:
+            break
+        if attempt < retries:
+            print(f"  Judge calibration: unusable reply "
+                  f"(mapped {mapped}/{len(test_names_ordered)}); retry {attempt+1}/{retries}")
+    if not result or mapped == 0:
+        print("  Judge calibration: failed (no usable predictions after retries)")
         return None
 
     comparisons = []

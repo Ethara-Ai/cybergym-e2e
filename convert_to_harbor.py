@@ -94,7 +94,7 @@ CHEAT_GATES = {
     "test_negative_weight_uses_network": [],
 }
 
-def _reference_patch_trips_scans(patch_text, test_output_text):
+def _reference_patch_trips_scans(patch_text, test_output_text, immutable=()):
     """Run the RENDERED verifier's own anti-cheat scans over the reference
     patch at convert time, so a task cannot ship with a reference that trips
     its own traps.  Executes the rendered module (no side effects beyond
@@ -110,6 +110,9 @@ def _reference_patch_trips_scans(patch_text, test_output_text):
         problems.append(f"uses_network would fire: {h}")
     for h in mod.sanitizer_tamper_hits(patch_text):
         problems.append(f"sanitizer_disabled would fire: {h}")
+    for h in mod.immutable_hits(patch_text, list(immutable)):
+        problems.append(f"patch_touches_immutable_files would fire: reference patch edits {h} "
+                        f"(declared immutable); narrow immutable_files in the task config.toml")
     return problems
 
 
@@ -206,7 +209,7 @@ def convert(task, mode, src_repo, data_root, out_root, agent_timeout, verifier_t
             problems.append(f"missing template {tmpl}")
     if patch.exists() and (TEMPLATES / "test_output.py.tmpl").exists():
         rendered = render(TEMPLATES / "test_output.py.tmpl", MODE=mode)
-        trips = _reference_patch_trips_scans(patch.read_text(errors="replace"), rendered)
+        trips = _reference_patch_trips_scans(patch.read_text(errors="replace"), rendered, immutable)
         problems.extend(f"reference patch trips its own anti-cheat: {t}" for t in trips)
     if problems:
         raise RuntimeError(f"{task}: " + "; ".join(problems))

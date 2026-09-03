@@ -477,34 +477,37 @@ def normalize_body_for_anthropic_direct(body: dict[str, Any]) -> dict[str, Any]:
     thinking = body.get("thinking")
     if isinstance(thinking, dict):
         ttype = thinking.get("type")
-        # Preserve the caller's display mode; default to "summarized".
-        #
-        # Load-bearing (priority-3 comment): the `display` field is what makes
-        # Anthropic-direct return READABLE thinking text. Verified live
-        # 2026-07-06 against api.anthropic.com with the Claude Max OAuth token:
-        #   thinking={type:enabled,budget_tokens:1024}                 -> thinking text "" (signature only)
-        #   thinking={type:enabled,budget_tokens:1024,display:summarized} -> thinking text len 142 (readable)
-        # Without display:summarized the OAuth/CLI path redacts the reasoning to
-        # an empty string + encrypted signature, so openclaw records empty
-        # thinking blocks. output_config:{effort:high} does NOT restore text on
-        # this endpoint. Do NOT drop `display`; if absent, inject "summarized".
-        display = thinking.get("display")
+        # Thinking text is suppressed BY THE REQUEST on the Claude 5 family:
+        # the claude CLI sends {"type":"adaptive","display":"omitted"}, and
+        # "omitted" is the documented per-model default for Opus 5 / Sonnet 5
+        # / Opus 4.8 / 4.7.  Two settings must both be right for readable
+        # reasoning to come back (measured live, 2026-09-03, claude-opus-5):
+        #   adaptive + omitted     -> 0 chars      (what the CLI asks for)
+        #   enabled  + summarized  -> 0 chars      (what this code used to send)
+        #   adaptive + summarized  -> readable summary text
+        # So: keep the caller's `type` (never rewrite adaptive into enabled),
+        # and force display to WCB_CC_THINKING_DISPLAY (default "summarized")
+        # unless the caller explicitly disabled thinking.  The judge grades the
+        # trajectory, and a trajectory without reasoning is half a trajectory.
+        display = os.environ.get("WCB_CC_THINKING_DISPLAY", "summarized").strip() or "summarized"
         if display not in ("summarized", "omitted"):
             display = "summarized"
-        if ttype == "adaptive":
-            budget = thinking.get("budget_tokens")
-            if not isinstance(budget, int) or budget <= 0:
-                budget = 32000
-            body["thinking"] = {
-                "type": "enabled", "budget_tokens": budget, "display": display,
-            }
-        elif ttype == "enabled":
-            budget = thinking.get("budget_tokens")
-            if not isinstance(budget, int) or budget <= 0:
-                budget = 32000
-            body["thinking"] = {
-                "type": "enabled", "budget_tokens": budget, "display": display,
-            }
+        # `enabled` + budget_tokens (what litellm/OpenHands send for
+        # reasoning_effort) returns NO text on the Claude 5 family even with
+        # display=summarized, so both forms are normalised to `adaptive`; the
+        # model then sizes its own thinking and budget_tokens is dropped.
+        # WCB_CC_THINKING_TYPE=enabled keeps the caller's enabled form (older
+        # models that lack adaptive).
+        ttype_out = os.environ.get("WCB_CC_THINKING_TYPE", "adaptive").strip() or "adaptive"
+        if ttype in ("adaptive", "enabled"):
+            if ttype_out == "enabled" and ttype == "enabled":
+                budget = thinking.get("budget_tokens")
+                if not isinstance(budget, int) or budget <= 0:
+                    budget = 32000
+                body["thinking"] = {"type": "enabled", "budget_tokens": budget, "display": display}
+            else:
+                body["thinking"] = {"type": "adaptive", "display": display}
+        # type == "disabled" (or unknown): left untouched.
     return body
 
 

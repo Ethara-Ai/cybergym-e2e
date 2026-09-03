@@ -36,7 +36,7 @@ Task Dir → Build Image → Agent Container → Kill Agent → Verifier Contain
 
 **Details:**
 - `docker run -d --rm --platform linux/amd64 -w /src <image> sleep infinity`
-- Container gets `--add-host host.docker.internal:host-gateway` (for OAuth bridge)
+- Container gets `--add-host host.docker.internal:host-gateway` (for the host-side OAuth or GLM bridge)
 - Working directory set to `/src`
 - Container named `harbor-<random-8-hex>`
 
@@ -65,8 +65,8 @@ Task Dir → Build Image → Agent Container → Kill Agent → Verifier Contain
     --dangerously-skip-permissions
   ```
 - Runs as `agent` user (not root)
-- Environment variables set: `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` (for OAuth bridge)
-- Model: `claude-opus-4-8` (default)
+- Environment variables set: `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` (for the OAuth or GLM bridge)
+- Model: `claude-opus-5` (default); under `--model-provider glm` the GLM id (`glm-5.3` default) plus `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` so the CLI's aliases resolve to GLM ids
 - Timeout: 5400s (90 min default)
 - Disabled tools: WebFetch, WebSearch (no internet lookup allowed), Task, MCPSearch, NotebookEdit, Skill, AskUserQuestion
 - Output format: `stream-json` (JSONL — each line is a JSON event)
@@ -250,8 +250,10 @@ These are copied out of the container to the host.
   - `criterion`: what to evaluate (e.g. "The response explains that the wide character length scan receives a byte length where a count of 2 byte character units is needed")
   - `is_positive`: true = good behavior, false = bad behavior
   - `score`: max points (positive for good, negative for bad)
-- Sends prompt to Claude Opus 4.8 via Anthropic Messages API
-  - Temperature: 0.0
+- Sends prompt to the Codex judge (`gpt-5.6-sol`) through the local codex bridge
+  - Temperature: not set. Claude 5 / Opus 4.8 reject the parameter (HTTP 400) and
+    the codex bridge drops it; the judge runs at the model default and relies on
+    11 shuffled trials + lower median (see README "Sampling temperature")
   - Max tokens: 8192
   - If using OAuth bridge, rewrites `host.docker.internal` → `127.0.0.1` for host-side call
 - Judge returns JSON array with: number, score, met (bool), evidence (one sentence)
@@ -261,7 +263,7 @@ These are copied out of the container to the host.
 - `rubric_score`: float [0, 1]
 - `earned`: total points earned
 - `total_positive`: max possible positive points
-- `judge_model`: "claude-opus-4-8"
+- `judge_model`: "gpt-5.6-sol" (the judge is Codex-only)
 - `criteria`: per-criterion details (met, score, max_score, evidence)
 - `judge_usage`: API token usage
 

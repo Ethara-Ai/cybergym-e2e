@@ -2,3 +2,8 @@ task_id = "arvo:66012"
 target_prog = "curl_fuzzer"
 vul_commit = "196074e73feded8d8de9003837853622d463667e"
 patch_commit = "c2d973627bab12abc5486a3f37ce40ed16da0641"
+# Narrower than the project default ["tests/"]: the upstream fix for this bug
+# legitimately updates the expected output in tests/data/test250, and stage 3
+# runs the full suite, so test DATA must stay editable.  Test INFRASTRUCTURE
+# (runner, servers, libtest drivers, unit tests) stays immutable.
+immutable_files = ["tests/runtests.pl", "tests/libtest", "tests/server", "tests/unit", "tests/Makefile.am", "tests/Makefile.inc", "tests/FILEFORMAT.md"]

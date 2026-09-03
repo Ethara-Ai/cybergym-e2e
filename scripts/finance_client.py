@@ -24,7 +24,7 @@ from pathlib import Path
 # --- Pricing -----------------------------------------------------------------
 # USD per 1M tokens, (input, output).  Anthropic first-party list prices.
 # Override or extend without touching this file via FINANCE_PRICING_JSON, e.g.
-#   FINANCE_PRICING_JSON={"claude-opus-4-8":[5,25],"my-model":[1.5,7.5]}
+#   FINANCE_PRICING_JSON={"claude-opus-5":[5,25],"my-model":[1.5,7.5]}
 # The pricing table lives in scripts/judge_lib.py (MODEL_PRICING) so the
 # judge's cost line and the Finance API's judge_cost_usd can never disagree.
 # FINANCE_PRICING_JSON still overrides per model with (input, output) pairs;
@@ -124,7 +124,10 @@ def _http_post(url, payload, timeout=5):
     if httpx is not None:
         try:
             r = httpx.post(url, content=data, headers=headers, timeout=timeout)
-            return r.status_code < 400, f"status={r.status_code}"
+            if r.status_code < 400:
+                return True, f"status={r.status_code}"
+            # Keep the API's explanation: a bare "status=400" is undebuggable.
+            return False, f"status={r.status_code} body={r.text[:300]!r}"
         except Exception as e:
             return False, f"{type(e).__name__}: {e}"
 
@@ -134,7 +137,8 @@ def _http_post(url, payload, timeout=5):
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status < 400, f"status={resp.status}"
     except urllib.error.HTTPError as e:
-        return False, f"HTTP {e.code}: {e.reason}"
+        body = e.read().decode("utf-8", "replace")[:300] if hasattr(e, "read") else ""
+        return False, f"HTTP {e.code}: {e.reason} body={body!r}"
     except Exception as e:
         return False, str(e)
 

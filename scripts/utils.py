@@ -323,10 +323,12 @@ def call_llm(
             session = boto3.Session(profile_name=aws_profile, region_name=aws_region)
             client = session.client("bedrock-runtime")
 
+            # No temperature: Claude 5 / Opus 4.8 reject it with HTTP 400
+            # ("`temperature` is deprecated for this model").
             response = client.converse(
                 modelId=bedrock_model_id,
                 messages=[{"role": "user", "content": [{"text": prompt}]}],
-                inferenceConfig={"maxTokens": max_tokens, "temperature": 0.0},
+                inferenceConfig={"maxTokens": max_tokens},
             )
             return response["output"]["message"]["content"][0]["text"]
         elif model_provider == "anthropic":
@@ -336,7 +338,6 @@ def call_llm(
             response = client.messages.create(
                 model=anthropic_model_id,
                 max_tokens=max_tokens,
-                temperature=0.0,
                 messages=[{"role": "user", "content": prompt}],
             )
             return response.content[0].text

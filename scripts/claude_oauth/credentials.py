@@ -24,12 +24,14 @@ Sources are tried in this priority order:
   6. ``~/.cache/wildclawbench/claude_creds.json`` (bridge refresh cache).
 
 Precedence (see ``load_credentials``): (1) wins outright; (2, WCB_CC_CREDS_PATH)
-is used exclusively when set; otherwise the FRESHEST credentials among the
-file, keychain, secret-service and cache sources are used (latest
-``expiresAt``), because Anthropic rotates the refresh token on every refresh
-and only the most recent copy still works.  After a refresh the new tokens
-are written back to the cache, the credentials file and (macOS) the keychain
-item, so the ``claude`` CLI and the bridge stay in sync.
+is used exclusively when set; otherwise the CLI's own store (file / keychain /
+secret-service, first found) is the login to use, and the bridge's refresh
+cache replaces it ONLY when the cache is that login's rotated successor
+(``wcbLineage.parentRefreshToken`` matches).  Anthropic rotates the refresh
+token on every refresh, so after a refresh the new tokens are written back to
+the cache and, if they still hold the same login, to the credentials file and
+the macOS keychain.  A store that meanwhile received a different login (another
+account on the same machine) is left untouched.
 
 On Linux no OS keychain is required: the ``claude`` CLI writes the file at (3),
 which is read directly. The Secret Service source at (5) only matters for
@@ -252,23 +254,53 @@ def load_credentials() -> OAuthCredentials:
         except (OSError, json.JSONDecodeError) as e:
             raise CredentialsError(f"WCB_CC_CREDS_PATH={override} unreadable: {e}") from e
 
-    candidates: list[tuple[str, OAuthCredentials]] = []
+    # The CLI's own store is the primary: whatever account the user last
+    # logged in with is the account to spend.
+    primary = None
     for name, reader in (
         ("file", _read_credentials_file),
         ("keychain", _read_keychain_macos),
         ("secret-service", _read_secretservice_linux),
-        ("cache", _read_cache_file),
     ):
         raw = reader()
         if not raw:
             continue
         try:
-            candidates.append((name, OAuthCredentials.from_claude_payload(json.loads(raw))))
+            primary = (name, OAuthCredentials.from_claude_payload(json.loads(raw)))
+            break
         except (json.JSONDecodeError, CredentialsError) as e:
             _LOG.warning("credential source %s unusable: %s", name, e)
-    if not candidates:
+
+    # The bridge's refresh cache is used ONLY when it is the rotated successor
+    # of the primary (its recorded parent refresh token equals the primary's
+    # current refresh token, or it carries the same refresh token).  A cache
+    # from a different login -- another account on the same machine -- must
+    # never win just because it expires later.
+    cache_raw = _read_cache_file()
+    if cache_raw:
+        try:
+            payload = json.loads(cache_raw)
+            cached = OAuthCredentials.from_claude_payload(payload)
+            parent = (payload.get("wcbLineage") or {}).get("parentRefreshToken")
+            if primary is None:
+                _LOG.info("credentials loaded from cache (no CLI login found)")
+                return cached
+            p_creds = primary[1]
+            same_lineage = (cached.refresh_token == p_creds.refresh_token
+                            or parent == p_creds.refresh_token)
+            if same_lineage and cached.expires_at_ms > p_creds.expires_at_ms:
+                _LOG.info("credentials loaded from cache (rotated successor of %s, expires in %ds)",
+                          primary[0], int(cached.expires_at_ms / 1000 - time.time()))
+                return cached
+            if not same_lineage:
+                _LOG.info("ignoring refresh cache: it belongs to a different login than %s",
+                          primary[0])
+        except (json.JSONDecodeError, CredentialsError) as e:
+            _LOG.warning("credential cache unusable: %s", e)
+
+    if primary is None:
         raise CredentialsError(_no_credentials_hint())
-    name, creds = max(candidates, key=lambda nc: nc[1].expires_at_ms)
+    name, creds = primary
     _LOG.info("credentials loaded from %s (expires in %ds)", name,
               int(creds.expires_at_ms / 1000 - time.time()))
     return creds
@@ -381,20 +413,43 @@ def _atomic_write_private(path: Path, text: str) -> None:
         raise
 
 
-def write_cache(creds: OAuthCredentials) -> None:
-    _atomic_write_private(_CACHE_PATH, json.dumps(creds.to_claude_payload()))
+def write_cache(creds: OAuthCredentials, parent_refresh_token: Optional[str] = None) -> None:
+    """Persist refreshed credentials together with the refresh token they were
+    derived from, so a later load can tell "this is the rotated successor of
+    what the CLI holds" from "this belongs to some other login".
+    """
+    payload = creds.to_claude_payload()
+    if parent_refresh_token:
+        payload["wcbLineage"] = {"parentRefreshToken": parent_refresh_token}
+    _atomic_write_private(_CACHE_PATH, json.dumps(payload))
 
 
-def persist_refreshed(creds: OAuthCredentials) -> None:
-    """Write refreshed credentials everywhere the CLI and the bridge read.
+def _same_login(stored: dict, old: Optional[OAuthCredentials]) -> bool:
+    """True iff `stored` (a claudeAiOauth payload) is the login we refreshed
+    from: same refresh token or same access token as the pre-refresh creds."""
+    if old is None:
+        return False
+    cc = stored.get("claudeAiOauth") if isinstance(stored, dict) else None
+    cc = cc or stored
+    if not isinstance(cc, dict):
+        return False
+    return (cc.get("refreshToken") == old.refresh_token
+            or cc.get("accessToken") == old.access_token)
+
+
+def persist_refreshed(creds: OAuthCredentials, old: Optional[OAuthCredentials] = None) -> None:
+    """Write refreshed credentials back to where the CLI and the bridge read.
 
     The refresh token rotates on every refresh, so whichever copy is not
-    updated is dead.  Cache first (always), then the credentials file if it
-    exists (preserving unrelated top-level keys), then the macOS keychain
-    entry if present.  Each step is best-effort and logged.
+    updated is dead.  The cache is always written (tagged with the parent
+    refresh token, see write_cache).  The credentials file and the macOS
+    keychain are updated ONLY if they still hold the login we refreshed from:
+    with two accounts on one machine, a long-running bridge for account A
+    must never overwrite the user's later login as account B.
     """
+    parent = old.refresh_token if old is not None else None
     try:
-        write_cache(creds)
+        write_cache(creds, parent_refresh_token=parent)
     except OSError as e:
         _LOG.warning("Could not persist refreshed creds to cache: %s", e)
 
@@ -407,18 +462,22 @@ def persist_refreshed(creds: OAuthCredentials) -> None:
                     existing = {}
             except (OSError, json.JSONDecodeError):
                 existing = {}
-            existing.update(creds.to_claude_payload())
-            _atomic_write_private(path, json.dumps(existing))
-            _LOG.info("refreshed credentials written back to %s", path)
+            if _same_login(existing, old):
+                existing.update(creds.to_claude_payload())
+                _atomic_write_private(path, json.dumps(existing))
+                _LOG.info("refreshed credentials written back to %s", path)
+            else:
+                _LOG.info("not writing refreshed creds to %s: it holds a different login", path)
         except OSError as e:
             _LOG.warning("Could not write refreshed creds to %s: %s", path, e)
 
     if platform.system() == "Darwin":
-        _write_keychain_macos(creds)
+        _write_keychain_macos(creds, old)
 
 
-def _write_keychain_macos(creds: OAuthCredentials) -> None:
-    """Update the CLI's keychain item in place (best-effort)."""
+def _write_keychain_macos(creds: OAuthCredentials, old: Optional[OAuthCredentials] = None) -> None:
+    """Update the CLI's keychain item in place (best-effort), but only if it
+    still holds the login these credentials were refreshed from."""
     try:
         probe = subprocess.run(
             ["security", "find-generic-password", "-s", _KEYCHAIN_SERVICE],
@@ -438,6 +497,9 @@ def _write_keychain_macos(creds: OAuthCredentials) -> None:
                     existing = parsed
         except (json.JSONDecodeError, TypeError):
             existing = {}
+        if not _same_login(existing, old):
+            _LOG.info("not writing refreshed creds to the keychain: it holds a different login")
+            return
         existing.update(creds.to_claude_payload())
         r = subprocess.run(
             ["security", "add-generic-password", "-U", "-a", account,
@@ -471,8 +533,9 @@ class CredentialProvider:
                 self._creds = load_credentials()
             if self._creds.is_expired():
                 _LOG.info("Refreshing Claude Code OAuth token")
-                self._creds = refresh_credentials(self._creds)
-                persist_refreshed(self._creds)
+                old = self._creds
+                self._creds = refresh_credentials(old)
+                persist_refreshed(self._creds, old)
             return self._creds.access_token
 
     def peek(self) -> OAuthCredentials:
@@ -597,8 +660,9 @@ class _KeychainCredentialProvider(CredentialProvider):
                 self._creds = self._load()
             if self._creds.is_expired():
                 _LOG.info("Refreshing OAuth token from keychain %s", self._service)
-                self._creds = refresh_credentials(self._creds)
-                persist_refreshed(self._creds)
+                old = self._creds
+                self._creds = refresh_credentials(old)
+                persist_refreshed(self._creds, old)
             return self._creds.access_token
 
     def token_prefix(self) -> Optional[str]:

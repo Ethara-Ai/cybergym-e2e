@@ -4,7 +4,8 @@ run_harbor.py — Run a Harbor-formatted CyberGym-E2E task end-to-end.
 
 Builds the environment image, installs the agent, runs the agent with the task
 instruction, then grades with the weighted verifier (tests/test.sh) in a separate
-container. Supports retry/feedback loops, Anthropic and Bedrock model providers.
+container. Supports retry/feedback loops and the Anthropic, Bedrock and GLM (Z.ai)
+model providers.
 
 Writes both Harbor (reward.txt/reward.json) and CyberGym (summary.json) output
 formats, including per-stage results, test weights, and rubric criteria details.
@@ -30,12 +31,16 @@ Usage:
         --model-provider bedrock \\
         --bedrock-model-id $BEDROCK_MODEL_ID --aws-region us-west-2
 
+    # GLM via the host-side Z.ai bridge (scripts/glm_bridge; needs ZAI_API_KEY)
+    python run_harbor.py tasks/harfbuzz__arvo_62774 \\
+        --model-provider glm --glm-model-id glm-5.3
+
     # Multiple attempts with feedback
     python run_harbor.py tasks/harfbuzz__arvo_62774 --max-attempts 3
 
     # Custom model and output directory
     python run_harbor.py tasks/curl__arvo_66012 \\
-        --agent claude-code --anthropic-model-id claude-opus-4-8 \\
+        --agent claude-code --anthropic-model-id claude-opus-5 \\
         --output-dir agent_output/curl_test
 
     # With timeout override
@@ -96,6 +101,7 @@ from judge_lib import (            # noqa: E402
     estimate_cost_usd,
     evaluate_judge_calibration,
     evaluate_rubric,
+    judge_endpoint_reachable,
     validate_judge_config,
 )
 from stage_names import (          # noqa: E402
@@ -156,10 +162,14 @@ def parse_verifier_stdout(text):
         tag = line[:6].upper()
         if tag not in ("[PASS]", "[FAIL]"):
             continue
-        parts = line.split(None, 2)
+        parts = line.split()
         if len(parts) < 2:
             continue
-        results[parts[1]] = "passed" if tag == "[PASS]" else "failed"
+        # Layouts seen in the wild: "[PASS] test_x (weight +15)" (template) and
+        # "[PASS]  15  test_x" (hand-written graders).  The test is the first
+        # token that looks like one; fall back to the second token.
+        name = next((t for t in parts[1:] if t.startswith("test_")), parts[1])
+        results[name] = "passed" if tag == "[PASS]" else "failed"
     return results
 
 
@@ -170,6 +180,8 @@ def _self_test():
 [pass] test_patch_file_exists (weight +1)
 noise line
 [FAIL] test_stage3_tests_pass_with_patch
+[PASS]  15  test_stage1_matio_poc_faults_vuln
+[fail]  -3  test_matio_patch_network_footprint
 """
     r = parse_verifier_stdout(sample)
     assert r == {
@@ -177,6 +189,8 @@ noise line
         "test_negative_weight_uses_network": "failed",
         "test_patch_file_exists": "passed",
         "test_stage3_tests_pass_with_patch": "failed",
+        "test_stage1_matio_poc_faults_vuln": "passed",
+        "test_matio_patch_network_footprint": "failed",
     }, r
     assert map_stages(r) == {"stage1": "passed", "stage3": "failed"}, map_stages(r)
     w = {"test_stage2_poc_ok_with_patch": 15, "test_stage3_tests_pass_with_patch": 10}
@@ -196,8 +210,11 @@ def is_report_based_task(task_dir):
         return False
 
 
-DEFAULT_AGENT_MODEL = "claude-opus-4-8"
+DEFAULT_AGENT_MODEL = "claude-opus-5"
 DEFAULT_MODEL_PROVIDER = "anthropic"
+# GLM ids the Z.ai Coding Plan lists (docs.z.ai/devpack/overview, 2026-09).
+DEFAULT_GLM_MODEL = "glm-5.3"
+DEFAULT_GLM_SMALL_MODEL = "glm-5.3-flash"
 DEFAULT_BEDROCK_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 DEFAULT_AWS_REGION = "us-west-2"
 
@@ -442,7 +459,7 @@ def sweep_stale_containers(max_age_hours=24.0):
             subprocess.run(["docker", "rm", "-f", cid], capture_output=True)
 
 
-def install_claude_code(cid):
+def install_claude_code(cid, need_boto3=False):
     # Task images vary: the oss-fuzz bases ship curl and populated apt lists, a
     # plain ubuntu base ships neither.  Without curl the NodeSource line is a
     # silent no-op (the pipeline exits on `bash -`, not on the missing curl), and
@@ -483,13 +500,21 @@ step "sudo iptables dnsutils util-linux"
 apt-get install -y sudo iptables dnsutils util-linux >/dev/null
 command -v pip3 >/dev/null 2>&1 || { step "python3-pip"; apt-get install -y python3-pip >/dev/null; }
 step "python deps"
-pip3 install --break-system-packages tomli boto3 >/dev/null 2>&1 \
-    || pip3 install tomli boto3 >/dev/null
+# PyPI reads time out now and then; retry rather than lose the run.  boto3 is
+# only needed by the Bedrock provider and is by far the largest download.
+PIPFLAGS="--retries 5 --timeout 60"
+PYDEPS="tomli"
+[ "$NEED_BOTO3" = "1" ] && PYDEPS="tomli boto3"
+pip3 install $PIPFLAGS --break-system-packages $PYDEPS >/dev/null 2>&1 \
+    || pip3 install $PIPFLAGS $PYDEPS >/dev/null
 step "verify toolchain"
 node --version >/dev/null || { echo "node is not usable after install"; exit 4; }
 python3 -c "import tomli" || { echo "tomli import failed after install"; exit 4; }
 step "claude-code"
-npm install -g @anthropic-ai/claude-code@2.1.91 >/dev/null
+n=0; until npm install -g @anthropic-ai/claude-code@2.1.91 >/dev/null; do
+    n=$((n+1)); [ $n -ge 3 ] && { echo "npm install failed after 3 attempts"; exit 4; }
+    echo "[install] npm install failed; retrying ($n/3)"; sleep 10
+done
 useradd -m -s /bin/bash agent 2>/dev/null || true
 # The agent needs root for compile.sh / git apply / cp into /src.  Root inside
 # the container is not the isolation boundary: CAP_NET_ADMIN is removed from
@@ -500,8 +525,8 @@ echo 'agent ALL=(ALL) NOPASSWD: ALL' >> /etc/sudoers
 chown -R agent:agent /src /output /out /work 2>/dev/null || true
 """
     code, out, stderr = exec_run(
-        cid, f"bash -c {shlex.quote(install_script)}",
-        "Installing Claude Code", timeout=600,
+        cid, f"NEED_BOTO3={'1' if need_boto3 else '0'} bash -c {shlex.quote(install_script)}",
+        "Installing Claude Code", timeout=900,
     )
     if code != 0:
         last_step = [l for l in out.splitlines() if l.startswith("[install]")]
@@ -779,6 +804,19 @@ def get_llm_env(args):
     auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
     if auth_token:
         env["ANTHROPIC_AUTH_TOKEN"] = auth_token
+    if args.model_provider == "glm":
+        # The GLM bridge is Anthropic-compatible, so the CLI is configured
+        # exactly as for the Claude bridge (start_glm_bridge already pointed
+        # ANTHROPIC_BASE_URL / *_API_KEY at it); only the model ids differ.
+        # The ANTHROPIC_DEFAULT_* aliases make the CLI's own opus/sonnet/haiku
+        # fallbacks resolve to GLM ids; the bridge also rewrites any claude-*
+        # id it still sees, so nothing can reach Z.ai under a Claude name.
+        model = args.glm_model_id
+        small = os.environ.get("GLM_SMALL_MODEL_ID", "").strip() or DEFAULT_GLM_SMALL_MODEL
+        env["ANTHROPIC_MODEL"] = model
+        env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model
+        env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = small
     return env, model
 
 
@@ -1071,7 +1109,13 @@ def run_verifier(image, task_dir, poc_path, patch_path, crash_path=None,
                         f"{vcid}:/verifier/"], capture_output=True, text=True)
 
         # Report-based tasks need report.json before test.sh can grade.
-        if is_report_based_task(task_dir) and REPORT_GENERATOR_PATH.exists():
+        # A task that ships its own generator (tests/gen_report.py, run by its
+        # test.sh) must not also get the repo's: that would compile every
+        # tree twice and the task's own output overwrites ours anyway.
+        task_has_generator = (task_dir / "tests" / "gen_report.py").exists()
+        if task_has_generator and is_report_based_task(task_dir):
+            print("  Report-based task ships its own tests/gen_report.py; not running the repo generator")
+        if is_report_based_task(task_dir) and REPORT_GENERATOR_PATH.exists() and not task_has_generator:
             print("  Report-based task detected — running generate_report.py")
             copy_to(vcid, REPORT_GENERATOR_PATH, "/verifier/generate_report.py")
             rg_code, rg_stdout, rg_stderr = exec_run(
@@ -1437,6 +1481,45 @@ def start_claude_subscription_bridge(args):
     return bridge
 
 
+def start_glm_bridge(args):
+    """Start the host-side GLM (Z.ai) bridge and point the agent at it.
+
+    The bridge (scripts/glm_bridge) is an Anthropic-compatible proxy: the
+    in-container Claude Code CLI talks to it exactly as it talks to the Claude
+    bridge, and it forwards to Z.ai's Anthropic endpoint with the host's
+    ZAI_API_KEY.  The key never enters the container; the run keeps the same
+    one-port network lockdown as a Claude-bridge run.
+
+    Returns the running GLMBridge (call .stop() when done), or raises with an
+    actionable message if the key/deps are missing.
+    """
+    scripts_dir = Path(__file__).parent / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        from glm_bridge import GLMBridge
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not import the GLM bridge (scripts/glm_bridge): {e}. "
+            "Install host deps with: bash scripts/install_bridge_deps.sh"
+        ) from e
+
+    # The bridge reads its model ids from the environment; the CLI flag wins.
+    os.environ["GLM_MODEL_ID"] = args.glm_model_id
+    bridge = GLMBridge(
+        port=args.cc_bridge_port,
+        bridge_secret=args.cc_bridge_secret,
+    )
+    print("  [bridge] starting GLM (Z.ai) bridge on the host...")
+    bridge.start()
+
+    os.environ["ANTHROPIC_BASE_URL"] = bridge.container_base_url
+    os.environ["ANTHROPIC_API_KEY"] = bridge.stub_api_key
+    os.environ["ANTHROPIC_AUTH_TOKEN"] = bridge.stub_api_key
+    print(f"  [bridge] ready: ANTHROPIC_BASE_URL={bridge.container_base_url} "
+          f"(upstream Z.ai, model {args.glm_model_id})")
+    return bridge
+
+
 def main():
     # Load .env before the parser is built so env values become argparse defaults.
     load_dotenv()
@@ -1460,9 +1543,16 @@ def main():
                     help="Do not remove stale harbor-* containers (>24h) at startup")
     ap.add_argument("--self-test", action="store_true",
                     help="Run the runner's internal unit checks and exit")
-    ap.add_argument("--model-provider", choices=["anthropic", "bedrock"],
+    ap.add_argument("--model-provider", choices=["anthropic", "bedrock", "glm"],
                     default=env_default("MODEL_PROVIDER", DEFAULT_MODEL_PROVIDER),
-                    help=f"Model provider (env MODEL_PROVIDER, default: {DEFAULT_MODEL_PROVIDER}).")
+                    help=f"Model provider (env MODEL_PROVIDER, default: {DEFAULT_MODEL_PROVIDER}). "
+                         "'glm' starts the host-side Z.ai bridge (scripts/glm_bridge; "
+                         "needs ZAI_API_KEY) and runs Claude Code against a GLM model.")
+    ap.add_argument("--glm-model-id",
+                    default=env_default("GLM_MODEL_ID", DEFAULT_GLM_MODEL),
+                    help=f"GLM model id for --model-provider glm (env GLM_MODEL_ID, "
+                         f"default: {DEFAULT_GLM_MODEL}; small/background model via "
+                         f"GLM_SMALL_MODEL_ID, default {DEFAULT_GLM_SMALL_MODEL}).")
     ap.add_argument("--anthropic-model-id",
                     default=env_default("ANTHROPIC_MODEL_ID", DEFAULT_AGENT_MODEL),
                     help=f"Agent model (env ANTHROPIC_MODEL_ID, default: {DEFAULT_AGENT_MODEL}).")
@@ -1481,9 +1571,10 @@ def main():
                          "(scripts/claude_oauth) using your Max/Pro subscription. "
                          "Forces --model-provider anthropic.")
     ap.add_argument("--cc-bridge-port", type=int, default=None,
-                    help="Fixed host port for the bridge (default: ephemeral free port).")
+                    help="Fixed host port for the host-side bridge, Claude subscription or GLM "
+                         "(default: ephemeral free port).")
     ap.add_argument("--cc-bridge-secret", default=None,
-                    help="Pin the bridge shared secret (default: random per run).")
+                    help="Pin the host-side bridge shared secret (default: random per run).")
 
     # --- Finance API (opt-in usage tracking, never affects scoring) ---
     ap.add_argument("--finance-api-url", default=os.environ.get("FINANCE_API_URL"),
@@ -1522,13 +1613,21 @@ def main():
     task_name = task_dir.name
     instruction = (task_dir / "instruction.md").read_text()
 
-    claude_bridge = None
+    if args.claude_subscription and args.model_provider == "glm":
+        sys.exit("ERROR: --claude-subscription and --model-provider glm are mutually exclusive "
+                 "(each starts its own host-side bridge)")
+
+    # Whichever host-side bridge this run starts (Claude subscription or GLM);
+    # stopped by the atexit hook below.
+    host_bridge = None
     if args.claude_subscription:
-        claude_bridge = start_claude_subscription_bridge(args)
+        host_bridge = start_claude_subscription_bridge(args)
         if not getattr(args, 'finance_subscription_id', ''):
             sub_id = get_claude_subscription_id()
             if sub_id:
                 args.finance_subscription_id = sub_id
+    elif args.model_provider == "glm":
+        host_bridge = start_glm_bridge(args)
 
     llm_env, llm_model = get_llm_env(args)
 
@@ -1563,6 +1662,16 @@ def main():
 
     mode = task_mode(task_dir)
     print(f"Mode: {mode}")
+    if not args.no_judge:
+        # The default judge is the local codex bridge; fail here, not after
+        # the agent has spent an hour, if it is not up.
+        ok, detail = judge_endpoint_reachable(llm_env)
+        if ok:
+            print(f"  Judge endpoint: {detail}")
+        else:
+            sys.exit(f"ERROR: {detail}\n"
+                     f"       Start it with:  (cd scripts && python -m codex_oauth --host 127.0.0.1 --port 8788) &\n"
+                     f"       or set JUDGE_PROVIDER=anthropic, or pass --no-judge.")
     if args.no_lockdown:
         os.environ["HARBOR_NO_LOCKDOWN"] = "1"
     # Fail on a bad judge configuration BEFORE building or running anything.
@@ -1571,6 +1680,33 @@ def main():
             validate_judge_config()
         except ValueError as e:
             sys.exit(f"ERROR: {e}")
+    # Finance reporting is opt-in and must never break a run, but a
+    # misconfiguration used to fail every post with a bare "status=400" for
+    # weeks.  Validate what can be validated locally, loudly, at startup.
+    if getattr(args, "finance_api_url", None):
+        fin_problems = []
+        if getattr(args, "finance_project_type", "") not in ("generalist", "technical"):
+            fin_problems.append(f"FINANCE_PROJECT_TYPE={args.finance_project_type!r} "
+                                f"(API accepts 'generalist' or 'technical')")
+        fin_notes = []
+        if not os.environ.get("FINANCE_API_TOKEN", "").strip():
+            # The staging API accepts unauthenticated posts (verified), so this
+            # is a note, not a failure.
+            fin_notes.append("FINANCE_API_TOKEN is empty: usage posts are sent unauthenticated")
+        if getattr(args, "finance_budget_type", "") == "RFP" and \
+                getattr(args, "finance_rfp_sub_type", "") not in ("testing", "sampling"):
+            fin_problems.append(f"FINANCE_RFP_SUB_TYPE={getattr(args, 'finance_rfp_sub_type', '')!r} "
+                                f"(API accepts 'testing' or 'sampling' when FINANCE_BUDGET_TYPE=RFP)")
+        if fin_problems:
+            print("  " + "!" * 66)
+            for fp in fin_problems:
+                print(f"  !! FINANCE CONFIG: {fp}")
+            print("  !! The Finance API will reject this run's usage post.")
+            print("  " + "!" * 66)
+        else:
+            print(f"  Finance API: {args.finance_api_url} (project {args.finance_project_id}, "
+                  f"{args.finance_project_type}/{args.finance_budget_type})"
+                  + (f"; note: {'; '.join(fin_notes)}" if fin_notes else ""))
 
     # A killed runner must still tear down its container and bridge: atexit
     # does not run on SIGTERM, and `finally:` needs an exception to unwind.
@@ -1628,8 +1764,8 @@ def main():
             iso_target = (_h or "api.anthropic.com", (_urlparse(_bu).port if _bu else None) or 443, "api")
 
     def _stop_bridge():
-        if claude_bridge is not None:
-            claude_bridge.stop()
+        if host_bridge is not None:
+            host_bridge.stop()
 
     atexit.register(_stop_bridge)
 
@@ -1645,7 +1781,7 @@ def main():
             cid = start_container(img_tag, name=cname, cap_add=["NET_ADMIN"])
             print(f"  Container: {cid[:12]}")
 
-            install_claude_code(cid)          # needs the network (apt/npm)
+            install_claude_code(cid, need_boto3=bool(llm_env.get("CLAUDE_CODE_USE_BEDROCK")))
 
             attempt_env = dict(llm_env)
             allow_host, allow_port = None, None
@@ -1777,6 +1913,8 @@ def main():
                     "avg_score": avg_score,          # always 0.0: nothing was graded
                     "judge_available": bool(rubric_data),
                 })
+                if best_reward is None:
+                    best_reward = 0.0            # scored (at zero); never out-ranks a graded attempt
                 if attempt < args.max_attempts:
                     feedback = f"\n=== Previous Attempt Failed ===\n{reason}."
                 continue
@@ -2011,12 +2149,19 @@ def main():
         "duration_minutes": round(duration / 60, 2),
         "output_dir": str(run_dir.absolute()),
         "model": llm_model,
+        "model_provider": args.model_provider,
         "harbor_task": str(task_dir),
     }
     json.dump(summary, open(run_dir / "summary.json", "w"), indent=2)
 
     # --- Finance API: post usage (opt-in, fully isolated) ---
-    if getattr(args, 'finance_api_url', None):
+    # A run that never reached the agent (install / isolation / build failure)
+    # has no usage to report; posting a zero-token record would only pollute
+    # the finance data.
+    ran_agent = any(a.get("agent_exec_seconds", 0) for a in all_attempts)
+    if getattr(args, 'finance_api_url', None) and not ran_agent:
+        print("  [finance] skipped: no agent execution in this run")
+    elif getattr(args, 'finance_api_url', None):
         try:
             scripts_dir_fin = Path(__file__).parent / "scripts"
             sys.path.insert(0, str(scripts_dir_fin))
