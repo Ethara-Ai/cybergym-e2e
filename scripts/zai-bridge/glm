@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# GLM bridge: run Claude Code on the Z.ai GLM Coding Plan subscription.
+#
+#   glm login    -> browser sign-in to Z.ai (no API key handling)
+#   glm logout   -> remove stored credential
+#   glm [...]    -> launch `claude` routed through Z.ai (any claude args work)
+#
+# Your normal `claude` command / Anthropic subscription stays untouched.
+set -euo pipefail
+
+KEY_FILE="$HOME/.zai_api_key"
+
+# Resolve the directory of this script (follows symlinks) so `glm login`
+# finds glm-login whether run from a repo checkout or an installed copy.
+SOURCE="${BASH_SOURCE[0]}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  [[ "$SOURCE" != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "$SOURCE")" >/dev/null 2>&1 && pwd)"
+
+case "${1:-}" in
+  login)
+    shift
+    exec python3 "$SCRIPT_DIR/glm-login" "$@"
+    ;;
+  logout)
+    rm -f "$KEY_FILE"
+    # Also disconnect the OpenCode TUI provider, if it was auto-connected
+    python3 - <<'PY' 2>/dev/null || true
+import json, os
+p = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
+                 "opencode", "auth.json")
+try:
+    with open(p) as f:
+        auth = json.load(f)
+    if auth.pop("zai-coding-plan", None) is not None:
+        with open(p, "w") as f:
+            json.dump(auth, f, indent=2)
+            f.write("\n")
+        print("   (OpenCode TUI provider 'zai-coding-plan' disconnected too)")
+except (FileNotFoundError, json.JSONDecodeError):
+    pass
+PY
+    echo "👋 Logged out of Z.ai (credential removed)."
+    exit 0
+    ;;
+esac
+
+if [[ ! -f "$KEY_FILE" ]]; then
+  echo "❌ Not signed in to Z.ai yet."
+  echo "   Run:  glm login   (opens browser, sign in with your Z.ai account)"
+  exit 1
+fi
+
+ANTHROPIC_AUTH_TOKEN="$(tr -d '[:space:]' < "$KEY_FILE")"
+export ANTHROPIC_AUTH_TOKEN
+export ANTHROPIC_BASE_URL="https://api.z.ai/api/anthropic"
+export API_TIMEOUT_MS=3000000
+# Make sure no stale Anthropic key interferes
+unset ANTHROPIC_API_KEY
+
+echo "🥷 GLM Mode — routing Claude Code through Z.ai Coding Plan"
+exec claude "$@"

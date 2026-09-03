@@ -39,11 +39,16 @@ def _load(p: Path):
 def resolve_task_dir(run_dir: Path, summary: dict | None) -> Path | None:
     """tasks/<name>: from summary.json's `task`, else the run-dir grandparent."""
     name = (summary or {}).get("task")
-    if not name:
-        # agent_output/<task>/<timestamp>_e2e -> <task>
-        name = run_dir.parent.name
-    cand = REPO / "tasks" / name
-    return cand if (cand / "tests").is_dir() else None
+    if name:
+        cand = REPO / "tasks" / name
+        return cand if (cand / "tests").is_dir() else None
+    # agent_output/<task>/<model>/<timestamp>_e2e (or the older
+    # agent_output/<task>/<timestamp>_e2e): an ancestor names the task.
+    for anc in (run_dir.parent, run_dir.parent.parent):
+        cand = REPO / "tasks" / anc.name
+        if (cand / "tests").is_dir():
+            return cand
+    return None
 
 
 def main(argv=None) -> int:

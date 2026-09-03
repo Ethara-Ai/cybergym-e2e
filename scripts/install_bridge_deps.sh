@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Host-side deps for the host-side bridges: Claude subscription
-# (scripts/claude_oauth), Codex (scripts/codex_oauth) and GLM/Z.ai
-# (scripts/glm_bridge).  All three need the same three packages.
+# Host-side deps for the Claude Code subscription bridge (scripts/claude_oauth).
 #
 # The bridge runs on the HOST (not in the task container) using the same Python
 # that runs run_agent.py, so install these into that interpreter. httpx is
@@ -14,4 +12,3 @@ PYTHON="${PYTHON:-python3}"
 
 echo "Bridge deps installed. Verify Claude Code subscription creds with:"
 echo "  $PYTHON -m claude_oauth --check   # run from the scripts/ dir"
-echo "GLM bridge: ZAI_API_KEY=... $PYTHON -m glm_bridge --check   # run from the scripts/ dir"

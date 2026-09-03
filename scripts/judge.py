@@ -8,7 +8,7 @@ or a disputed score re-checked for the price of the judge calls alone.
 
 Usage:
     # a completed run directory (finds its own task and trajectory)
-    python scripts/judge.py agent_output/OSV-2026-1015/20260821_120733_e2e
+    python scripts/judge.py agent_output/OSV-2026-1015/claude-opus-5/20260821_120733_e2e
 
     # explicit task + trajectory
     python scripts/judge.py --task tasks/OSV-2026-1015 --trajectory path/to/agent.jsonl
@@ -71,10 +71,13 @@ def resolve_inputs(args, rh):
                 except (OSError, json.JSONDecodeError):
                     pass
             if task_dir is None:
-                # agent_output/<task>/<timestamp>/ -- the parent names the task.
-                guess = REPO_ROOT / "tasks" / run_dir.parent.name
-                if guess.is_dir():
-                    task_dir = guess
+                # agent_output/<task>/<model>/<timestamp>/ (or the older
+                # agent_output/<task>/<timestamp>/): an ancestor names the task.
+                for anc in (run_dir.parent, run_dir.parent.parent):
+                    guess = REPO_ROOT / "tasks" / anc.name
+                    if guess.is_dir():
+                        task_dir = guess
+                        break
 
     if task_dir is None:
         sys.exit("ERROR: could not determine the task; pass --task tasks/<name>")

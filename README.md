@@ -131,9 +131,11 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 ```
 
 ```bash
-# GLM (Z.ai) through the host-side GLM bridge; needs ZAI_API_KEY in .env or the env
-python run_harbor.py tasks/harfbuzz__arvo_62774 \
-    --model-provider glm --glm-model-id glm-5.3 --cc-bridge-port 3457
+# GLM on a Z.ai Coding Plan (sign in once with scripts/zai-bridge/glm login)
+python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm
+
+# ... pinned to one GLM id instead of Z.ai's server-side mapping
+python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm --glm-model-id glm-5.3
 ```
 
 **Options:**
@@ -143,16 +145,16 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `task_dir` | (required) | Path to Harbor task directory |
 | `--timeout` | `5400` | Agent timeout in seconds |
 | `--max-attempts` | `1` | Number of attempts (with feedback between attempts) |
-| `--model-provider` | `anthropic` | LLM provider: `anthropic`, `bedrock` or `glm` (Z.ai via the host-side GLM bridge) |
+| `--model-provider` | `anthropic` | LLM provider: `anthropic`, `bedrock` or `glm` (Z.ai GLM Coding Plan, see below) |
 | `--anthropic-model-id` | `claude-opus-5` | Anthropic model ID for the agent |
 | `--bedrock-model-id` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID |
-| `--glm-model-id` | `glm-5.3` | GLM model ID for `--model-provider glm` |
+| `--glm-model-id` | none | Pin a GLM model id for `--model-provider glm`; by default Z.ai maps Claude ids to GLM server-side |
 | `--aws-region` | `us-west-2` | AWS region for Bedrock |
-| `--output-dir` | `agent_output/<task>/<timestamp>_e2e` | Custom output directory |
-| `--evidence-dir` | `evidence/<task>/<timestamp>_e2e` | Where agent evidence (`crash.log`) is collected, outside `agent_output/` |
+| `--output-dir` | `agent_output/<task>/<model>/<timestamp>_e2e` | Custom output directory |
+| `--evidence-dir` | `evidence/<task>/<model>/<timestamp>_e2e` | Where agent evidence (`crash.log`) is collected, outside `agent_output/` |
 | `--claude-subscription` | off | Route through the Claude Code OAuth bridge using your Max/Pro subscription (forces `--model-provider anthropic`) |
-| `--cc-bridge-port` | ephemeral | Fixed host port for the host-side bridge (Claude subscription or GLM) |
-| `--cc-bridge-secret` | random | Pin the host-side bridge shared secret (default: random per run) |
+| `--cc-bridge-port` | ephemeral | Fixed host port for the OAuth bridge |
+| `--cc-bridge-secret` | random | Pin the bridge shared secret (default: random per run) |
 | `--no-judge` | off | Skip the rubric judge and calibration. Reward = `pytest_score` alone; every score file and `summary.json` carry `scoring: pytest_only`, so the number cannot be mistaken for a judged one. Use for verifier smoke tests |
 | `--shared-network` | off | Keep the agent container on the default Docker bridge instead of an `--internal` network with a one-port relay (weaker isolation; flagged `isolated_network: false`) |
 | `--no-lockdown` | off | Do not firewall the agent container (flagged in `summary.json`; the run is not trustworthy). Debugging only |
@@ -175,11 +177,10 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 | `ANTHROPIC_MODEL_ID` | Agent model; default `claude-opus-5` |
 | `BEDROCK_MODEL_ID` | Bedrock model id |
 | `AWS_REGION` | AWS region; default `us-west-2` |
-| `ZAI_API_KEY` | Z.ai key for `--model-provider glm` (also read: `GLM_API_KEY`, `ZHIPU_API_KEY`, `GLM_API_KEY_FILE`, `~/.config/zai/api_key`). Stays on the host |
-| `GLM_MODEL_ID` | GLM agent model; default `glm-5.3` |
-| `GLM_SMALL_MODEL_ID` | GLM model the bridge substitutes for the CLI's `claude-*haiku*` background calls; default `glm-5.3-flash` |
-| `GLM_UPSTREAM` | Z.ai Anthropic-compatible endpoint; default `https://api.z.ai/api/anthropic` (mainland: `https://open.bigmodel.cn/api/anthropic`) |
-| `KAKASHI_GLM_BRIDGE_SECRET` | Shared secret for a manually started `glm_bridge` (the runner generates one per run) |
+| `ZAI_API_KEY` | Z.ai credential for `--model-provider glm` when there is no `~/.zai_api_key` (from `scripts/zai-bridge/glm login`) |
+| `GLM_MODEL_ID` | Pin the GLM agent model; default none (server-mapped) |
+| `GLM_SMALL_MODEL_ID` | Pin the haiku-tier GLM model; default none |
+| `GLM_API_TIMEOUT_MS` | Claude Code per-request timeout under `glm`; default `3000000` |
 | `JUDGE_PROVIDER` | `codex` only (default). The rubric judge never uses an Anthropic model; the local codex bridge is checked at startup |
 | `JUDGE_MAX_RETRIES` | Transport retries per judge call (backoff + jitter, honours `Retry-After`); default `4` |
 | `JUDGE_TEMPERATURE` | Unset by default: the Claude 5 family (and opus-4-8) reject `temperature` with HTTP 400, so the judge runs at the model default and relies on 11 trials + lower median. Set only for a model that accepts it |
@@ -241,7 +242,7 @@ Check any run with:
 python3 - <<'PY'
 import json,glob,sys
 n=t=0
-for line in open(glob.glob("agent_output/<task>/<run>/trajectory/agent.jsonl")[0]):
+for line in open(glob.glob("agent_output/<task>/<model>/<run>/trajectory/agent.jsonl")[0]):
     try: e=json.loads(line)
     except Exception: continue
     for b in (e.get("message",{}) or {}).get("content") or []:
@@ -268,44 +269,43 @@ The `--claude-subscription` flag auto-starts the Claude Code OAuth bridge (`scri
 
 The bridge automatically kills any stale bridge process on the same port from a previous run.
 
-### GLM (Z.ai) Bridge Mode
+### GLM (Z.ai Coding Plan) Mode
 
-`--model-provider glm` runs the same in-container Claude Code agent against a
-GLM model. It auto-starts `scripts/glm_bridge`, an Anthropic-compatible proxy on
-the host that forwards `/v1/messages` to Z.ai's Anthropic endpoint
-(`https://api.z.ai/api/anthropic`, the one the GLM Coding Plan documents for
-Claude Code) with the host's `ZAI_API_KEY`. The container only ever sees the
-bridge address and a per-run stub key, so the credential path and the one-port
-network lockdown are identical to a `--claude-subscription` run.
+`--model-provider glm` runs the same in-container Claude Code agent on a Z.ai
+GLM Coding Plan, the way `scripts/zai-bridge/glm` runs an interactive session:
+Claude Code talks to Z.ai's Anthropic-compatible endpoint
+(`https://api.z.ai/api/anthropic`) directly. There is no proxy.
 
-**Prerequisites:**
-- `ZAI_API_KEY` in `.env` or the environment (a Coding Plan key or a pay-as-you-go key)
-- Bridge dependencies: `bash scripts/install_bridge_deps.sh` (same three packages as the Claude bridge)
-
-**How it works:**
-1. `run_harbor.py` starts `python -m glm_bridge` on `127.0.0.1:<port>` and waits for `/healthz`
-2. `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN` are pointed at the bridge; `ANTHROPIC_MODEL` and the `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` aliases carry the GLM ids into the container
-3. The bridge rewrites any remaining `claude-*` model id to `GLM_MODEL_ID` (`*haiku*` to `GLM_SMALL_MODEL_ID`), swaps the stub key for the real one, and streams the SSE reply back verbatim with a keep-alive comment during long reasoning pauses
-4. `summary.json` records `model_provider: glm` and the GLM id in `model`
+**Sign in once (host):**
 
 ```bash
-# Verify the key loads (run from scripts/)
-ZAI_API_KEY=... python -m glm_bridge --check
-
-# Offline self-test of the proxy (auth, model mapping, streaming, errors)
-python -m glm_bridge.selftest
-
-# Run the bridge by hand, e.g. for other clients
-export KAKASHI_GLM_BRIDGE_SECRET=$(uuidgen)
-python -m glm_bridge --host 127.0.0.1 --port 8790 &
-export ANTHROPIC_BASE_URL=http://127.0.0.1:8790 ANTHROPIC_API_KEY=$KAKASHI_GLM_BRIDGE_SECRET
+scripts/zai-bridge/install.sh     # optional: puts `glm` and `glm-login` on PATH
+scripts/zai-bridge/glm login      # browser OAuth; mints a Coding Plan key named glm-bridge
+scripts/zai-bridge/glm login --paste-key   # or paste a key from z.ai/manage-apikey/apikey-list
 ```
 
-**Caveats.** GLM models are unpriced in `MODEL_PRICING`, so a run terminated
-before the CLI's `result` event reports `total_cost_usd: 0.0` with
-`cost_known: false`; add a `FINANCE_PRICING_JSON` entry if a cost line matters.
-The rubric judge is unaffected (it stays Codex-only). `--claude-subscription`
-and `--model-provider glm` are mutually exclusive.
+The credential lands in `~/.zai_api_key` (mode 600). `glm logout` removes it.
+`ZAI_API_KEY` in `.env` is the fallback for a host without a browser. See
+`scripts/zai-bridge/README.md` and `TEAM-GUIDE.md` for the flow, verification
+and troubleshooting; `glm` on its own launches an interactive Claude Code on
+the plan, while your normal `claude` command stays on the Anthropic subscription.
+
+**What the runner does:**
+1. Reads the key from `~/.zai_api_key` (else `ZAI_API_KEY`) and fails at startup with the sign-in command if neither exists
+2. Passes the agent `ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic`, `ANTHROPIC_AUTH_TOKEN=<key>` (never `ANTHROPIC_API_KEY`, which makes Claude Code raise a trust prompt) and `API_TIMEOUT_MS=3000000`
+3. Locks the container network the same way as a plain Anthropic key: `api.z.ai` is resolved once, pinned in `/etc/hosts`, and only it is reachable on 443 through the one-port relay
+4. Stores the run under `agent_output/<task>/glm/<timestamp>_e2e/` (or the pinned id instead of `glm`), next to the Opus 5 runs in `agent_output/<task>/claude-opus-5/`; the evidence tree mirrors it
+5. Sends no model id by default; Z.ai maps Claude ids to GLM server-side (opus/sonnet to its current best GLM, haiku to a light model) and every step of `trajectory.json` records the GLM id Z.ai answered as. `summary.json` carries `model_provider: glm` and `model: glm (server-mapped by Z.ai)`, or the pinned id when `--glm-model-id` / `GLM_MODEL_ID` is set (`GLM_SMALL_MODEL_ID` pins the haiku tier)
+
+**Caveats.** An upstream error with code `1113 Insufficient Balance` means the
+key's account has no active Coding Plan. Quota is a 5-hour rolling window; a
+429 mid-run means the window is exhausted, not a bug. GLM models are unpriced
+in `MODEL_PRICING`, so a run terminated before the CLI's `result` event reports
+`total_cost_usd: 0.0` with `cost_known: false`; add a `FINANCE_PRICING_JSON`
+entry if a cost line matters. The rubric judge is unaffected (it stays
+Codex-only). `--claude-subscription` and `--model-provider glm` are mutually
+exclusive. The key is passed into the agent container as an env var, like a
+plain Anthropic API key; the network lockdown is what stops it leaving.
 
 ## Rubric Judging
 
@@ -325,7 +325,7 @@ scripts/judge_lib.py     the judge: prompts, transports, scoring, anomalies
 scripts/judge.py         CLI for re-judging a trajectory (writes rubric_score.json only)
 scripts/rejudge_sync.py  after a re-judge: re-derive reward files + calibration in place
 scripts/codex_oauth/     OAuth bridge for judging through a ChatGPT subscription
-scripts/glm_bridge/      host-side bridge that runs the agent on a GLM (Z.ai) model
+scripts/zai-bridge/      Z.ai sign-in (`glm login`) + interactive `glm` launcher for the GLM provider
 run_harbor.py            imports judge_lib for the scoring pass
 ```
 
@@ -547,7 +547,7 @@ rubric revision or a disputed score costs judge calls instead of a whole run.
 (cd scripts && python -m claude_oauth --host 127.0.0.1 --port 3456 --bridge-secret "$WCB_CC_BRIDGE_SECRET") &
 
 # Judge a completed run (task and trajectory are inferred from the directory)
-python scripts/judge.py agent_output/<task>/<timestamp>_e2e -o /tmp/rubric.json
+python scripts/judge.py agent_output/<task>/<model>/<timestamp>_e2e -o /tmp/rubric.json
 
 # Explicit task + trajectory
 python scripts/judge.py --task tasks/<task> --trajectory path/to/agent.jsonl
@@ -568,7 +568,7 @@ in place, but `avg_score.json` / `reward.json` / `reward.txt` / `calibration.jso
   (which updates `rubric_score.json`) then propagate:
 
 ```bash
-RUN=agent_output/<task>/<timestamp>_e2e
+RUN=agent_output/<task>/<model>/<timestamp>_e2e
 JUDGE_PROVIDER=codex python scripts/judge.py "$RUN"
 # re-derive reward files (avg = (pytest + rubric) / 2) and regenerate calibration:
 JUDGE_PROVIDER=codex JUDGE_CALIBRATION_MODEL=gpt-5.5 python scripts/rejudge_sync.py "$RUN"
@@ -640,7 +640,7 @@ MODE=e2e MAX_PARALLEL=4 bash scripts/batch_run.sh scripts/tasks.txt
 Each run produces the following output directory:
 
 ```
-agent_output/<task>/<timestamp>_e2e/
+agent_output/<task>/<model>/<timestamp>_e2e/      # <model>: claude-opus-5, glm, ...
 ├── summary.json              # Top-level results with all scores and stage details
 ├── output/
 │   ├── poc.bin               # Agent-generated proof-of-concept

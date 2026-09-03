@@ -31,9 +31,8 @@ Usage:
         --model-provider bedrock \\
         --bedrock-model-id $BEDROCK_MODEL_ID --aws-region us-west-2
 
-    # GLM via the host-side Z.ai bridge (scripts/glm_bridge; needs ZAI_API_KEY)
-    python run_harbor.py tasks/harfbuzz__arvo_62774 \\
-        --model-provider glm --glm-model-id glm-5.3
+    # GLM on a Z.ai Coding Plan (sign in once: scripts/zai-bridge/glm login)
+    python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm
 
     # Multiple attempts with feedback
     python run_harbor.py tasks/harfbuzz__arvo_62774 --max-attempts 3
@@ -47,7 +46,7 @@ Usage:
     python run_harbor.py tasks/irssi__arvo_31491 --agent claude-code --timeout 3600
 
 Output:
-    agent_output/<task>/<timestamp>_e2e/
+    agent_output/<task>/<model>/<timestamp>_e2e/    e.g. .../claude-opus-5/... and .../glm/...
     ├── summary.json           # Full results: stages, scores, test weights, rubric
     ├── output/                # PoC and patch files per attempt
     ├── trajectory/            # Agent logs per attempt
@@ -212,9 +211,16 @@ def is_report_based_task(task_dir):
 
 DEFAULT_AGENT_MODEL = "claude-opus-5"
 DEFAULT_MODEL_PROVIDER = "anthropic"
-# GLM ids the Z.ai Coding Plan lists (docs.z.ai/devpack/overview, 2026-09).
-DEFAULT_GLM_MODEL = "glm-5.3"
-DEFAULT_GLM_SMALL_MODEL = "glm-5.3-flash"
+# GLM (Z.ai Coding Plan) via scripts/zai-bridge: Claude Code talks to Z.ai's
+# Anthropic-compatible endpoint directly with the credential `glm login`
+# stores in ~/.zai_api_key.  Z.ai maps Claude model ids to GLM server-side
+# (opus/sonnet -> its current best GLM, haiku -> a light model), so the
+# default is to send no model id and record what Z.ai answered as.
+ZAI_ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic"
+ZAI_KEY_FILE = Path.home() / ".zai_api_key"
+GLM_SERVER_MAPPED = "glm (server-mapped by Z.ai)"
+DEFAULT_GLM_MODEL = ""          # "" = server-mapped; set to pin, e.g. glm-5.3
+DEFAULT_GLM_API_TIMEOUT_MS = "3000000"   # zai-bridge's setting: GLM turns can take minutes
 DEFAULT_BEDROCK_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 DEFAULT_AWS_REGION = "us-west-2"
 
@@ -775,6 +781,8 @@ def _print_agent_event(event):
 
 
 def get_llm_env(args):
+    if args.model_provider == "glm":
+        return get_glm_env(args)
     if args.model_provider == "bedrock":
         model = args.bedrock_model_id
         env = {
@@ -804,20 +812,71 @@ def get_llm_env(args):
     auth_token = os.environ.get("ANTHROPIC_AUTH_TOKEN")
     if auth_token:
         env["ANTHROPIC_AUTH_TOKEN"] = auth_token
+    return env, model
+
+
+def run_model_slug(args, llm_model):
+    """Directory name for the model level of agent_output/<task>/<model>/.
+
+    anthropic: the model id (claude-opus-5); glm: the pinned GLM id, else
+    "glm" (Z.ai maps the model server-side); bedrock: the model part of the
+    id or ARN.  Only [A-Za-z0-9._-] survive, so ARNs and dotted ids are safe.
+    """
     if args.model_provider == "glm":
-        # The GLM bridge is Anthropic-compatible, so the CLI is configured
-        # exactly as for the Claude bridge (start_glm_bridge already pointed
-        # ANTHROPIC_BASE_URL / *_API_KEY at it); only the model ids differ.
-        # The ANTHROPIC_DEFAULT_* aliases make the CLI's own opus/sonnet/haiku
-        # fallbacks resolve to GLM ids; the bridge also rewrites any claude-*
-        # id it still sees, so nothing can reach Z.ai under a Claude name.
-        model = args.glm_model_id
-        small = os.environ.get("GLM_SMALL_MODEL_ID", "").strip() or DEFAULT_GLM_SMALL_MODEL
+        raw = (args.glm_model_id or "").strip() or "glm"
+    elif args.model_provider == "bedrock":
+        # ARN -> last path segment; drop a trailing ":<n>" version suffix.
+        raw = re.sub(r":\d+$", "", llm_model.rsplit("/", 1)[-1])
+    else:
+        raw = llm_model
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", raw).strip("._-")
+    return slug or args.model_provider
+
+
+def load_zai_key():
+    """The Z.ai credential, exactly as scripts/zai-bridge/glm reads it:
+    ~/.zai_api_key (written by `glm login`, whitespace stripped), else
+    ZAI_API_KEY from the environment/.env for hosts without a browser."""
+    if ZAI_KEY_FILE.is_file():
+        key = "".join(ZAI_KEY_FILE.read_text(errors="replace").split())
+        if key:
+            return key, str(ZAI_KEY_FILE)
+    key = os.environ.get("ZAI_API_KEY", "").strip()
+    if key:
+        return key, "ZAI_API_KEY"
+    sys.exit("ERROR: not signed in to Z.ai (no ~/.zai_api_key and no ZAI_API_KEY).\n"
+             "       Run:  scripts/zai-bridge/glm login          (browser sign-in)\n"
+             "       or:   scripts/zai-bridge/glm login --paste-key")
+
+
+def get_glm_env(args):
+    """Agent env for --model-provider glm: the same contract scripts/zai-bridge/glm
+    gives an interactive Claude Code session.
+
+    ANTHROPIC_AUTH_TOKEN carries the key (never ANTHROPIC_API_KEY, which makes
+    Claude Code raise a trust prompt), ANTHROPIC_BASE_URL is Z.ai's Anthropic
+    endpoint, and API_TIMEOUT_MS is raised because GLM turns can take minutes.
+    The network lockdown resolves api.z.ai once and allows only it on 443, the
+    same "api" mode a plain Anthropic key gets.  No model id is sent unless
+    --glm-model-id pins one; Z.ai maps Claude ids to GLM server-side.
+    """
+    key, source = load_zai_key()
+    env = {
+        "ANTHROPIC_BASE_URL": ZAI_ANTHROPIC_BASE_URL,
+        "ANTHROPIC_AUTH_TOKEN": key,
+        "API_TIMEOUT_MS": os.environ.get("GLM_API_TIMEOUT_MS", "").strip() or DEFAULT_GLM_API_TIMEOUT_MS,
+    }
+    model = (args.glm_model_id or "").strip()
+    if model:
         env["ANTHROPIC_MODEL"] = model
         env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model
         env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model
-        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = small
-    return env, model
+        small = os.environ.get("GLM_SMALL_MODEL_ID", "").strip()
+        if small:
+            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = small
+    print(f"  [glm] Z.ai credential from {source}; endpoint {ZAI_ANTHROPIC_BASE_URL}; "
+          f"model {model or 'server-mapped'}")
+    return env, model or GLM_SERVER_MAPPED
 
 
 def convert_jsonl_to_trajectory(log_path, output_path):
@@ -1481,43 +1540,60 @@ def start_claude_subscription_bridge(args):
     return bridge
 
 
-def start_glm_bridge(args):
-    """Start the host-side GLM (Z.ai) bridge and point the agent at it.
+def start_codex_judge_bridge(llm_env):
+    """Auto-start the local codex_oauth judge bridge when the codex judge needs
+    it and nothing is answering yet -- the judge counterpart to
+    --claude-subscription's auto-start for the agent.
 
-    The bridge (scripts/glm_bridge) is an Anthropic-compatible proxy: the
-    in-container Claude Code CLI talks to it exactly as it talks to the Claude
-    bridge, and it forwards to Z.ai's Anthropic endpoint with the host's
-    ZAI_API_KEY.  The key never enters the container; the run keeps the same
-    one-port network lockdown as a Claude-bridge run.
-
-    Returns the running GLMBridge (call .stop() when done), or raises with an
-    actionable message if the key/deps are missing.
+    Returns a subprocess.Popen to terminate on exit, or None when nothing was
+    started: the judge is not codex, it was pointed at an explicit/non-local
+    endpoint, a bridge is already up, or the launch did not come up (in which
+    case the caller's reachability check reports it with manual instructions).
     """
+    prov = (os.environ.get("JUDGE_PROVIDER") or "").strip().lower() or DEFAULT_JUDGE_PROVIDER
+    if prov != "codex":
+        return None
+    # An explicit judge endpoint is the user's to run; do not manage it.
+    if (os.environ.get("JUDGE_BASE_URL") or "").strip():
+        return None
+    base = (os.environ.get("CODEX_BRIDGE_URL") or "").strip() or "http://127.0.0.1:8788"
+    from urllib.parse import urlparse
+    host = urlparse(base).hostname or "127.0.0.1"
+    port = urlparse(base).port or 8788
+    if host not in ("127.0.0.1", "localhost", "::1"):
+        return None  # a remote bridge is not ours to launch
+    ok, _ = judge_endpoint_reachable(llm_env)
+    if ok:
+        return None  # already running (user-started or a prior run)
+    # The judge sends KAKASHI_CODEX_BRIDGE_SECRET (else falls back to
+    # "codex-bridge"); set it BEFORE spawning so the child requires the same value.
+    os.environ.setdefault("KAKASHI_CODEX_BRIDGE_SECRET", "codex-bridge")
     scripts_dir = Path(__file__).parent / "scripts"
-    sys.path.insert(0, str(scripts_dir))
+    print(f"  [codex-bridge] judge bridge not running; starting on {host}:{port} ...")
     try:
-        from glm_bridge import GLMBridge
-    except Exception as e:
-        raise RuntimeError(
-            f"Could not import the GLM bridge (scripts/glm_bridge): {e}. "
-            "Install host deps with: bash scripts/install_bridge_deps.sh"
-        ) from e
-
-    # The bridge reads its model ids from the environment; the CLI flag wins.
-    os.environ["GLM_MODEL_ID"] = args.glm_model_id
-    bridge = GLMBridge(
-        port=args.cc_bridge_port,
-        bridge_secret=args.cc_bridge_secret,
-    )
-    print("  [bridge] starting GLM (Z.ai) bridge on the host...")
-    bridge.start()
-
-    os.environ["ANTHROPIC_BASE_URL"] = bridge.container_base_url
-    os.environ["ANTHROPIC_API_KEY"] = bridge.stub_api_key
-    os.environ["ANTHROPIC_AUTH_TOKEN"] = bridge.stub_api_key
-    print(f"  [bridge] ready: ANTHROPIC_BASE_URL={bridge.container_base_url} "
-          f"(upstream Z.ai, model {args.glm_model_id})")
-    return bridge
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "codex_oauth",
+             "--host", str(host), "--port", str(port), "--log-level", "warning"],
+            cwd=str(scripts_dir))
+    except Exception as e:  # noqa: BLE001
+        print(f"  [codex-bridge] could not launch: {e}")
+        return None
+    for _ in range(30):
+        if proc.poll() is not None:
+            print("  [codex-bridge] exited during startup "
+                  "(debug: cd scripts && python -m codex_oauth --check)")
+            return None
+        ok, _ = judge_endpoint_reachable(llm_env)
+        if ok:
+            print("  [codex-bridge] ready")
+            return proc
+        time.sleep(1)
+    print("  [codex-bridge] did not become reachable in time")
+    try:
+        proc.terminate()
+    except Exception:  # noqa: BLE001
+        pass
+    return None
 
 
 def main():
@@ -1546,13 +1622,14 @@ def main():
     ap.add_argument("--model-provider", choices=["anthropic", "bedrock", "glm"],
                     default=env_default("MODEL_PROVIDER", DEFAULT_MODEL_PROVIDER),
                     help=f"Model provider (env MODEL_PROVIDER, default: {DEFAULT_MODEL_PROVIDER}). "
-                         "'glm' starts the host-side Z.ai bridge (scripts/glm_bridge; "
-                         "needs ZAI_API_KEY) and runs Claude Code against a GLM model.")
+                         "'glm' runs Claude Code against Z.ai's Anthropic endpoint on a GLM "
+                         "Coding Plan, with the credential from scripts/zai-bridge/glm login.")
     ap.add_argument("--glm-model-id",
                     default=env_default("GLM_MODEL_ID", DEFAULT_GLM_MODEL),
-                    help=f"GLM model id for --model-provider glm (env GLM_MODEL_ID, "
-                         f"default: {DEFAULT_GLM_MODEL}; small/background model via "
-                         f"GLM_SMALL_MODEL_ID, default {DEFAULT_GLM_SMALL_MODEL}).")
+                    help="Pin a GLM model id for --model-provider glm (env GLM_MODEL_ID). "
+                         "Default: none; Z.ai maps Claude ids to GLM server-side and the "
+                         "trajectory records the id it answered as. GLM_SMALL_MODEL_ID pins "
+                         "the haiku-tier model.")
     ap.add_argument("--anthropic-model-id",
                     default=env_default("ANTHROPIC_MODEL_ID", DEFAULT_AGENT_MODEL),
                     help=f"Agent model (env ANTHROPIC_MODEL_ID, default: {DEFAULT_AGENT_MODEL}).")
@@ -1563,18 +1640,17 @@ def main():
                     help=f"AWS region (env AWS_REGION, default: {DEFAULT_AWS_REGION}).")
     ap.add_argument("--evidence-dir", default=os.environ.get("EVIDENCE_DIR"),
                     help="Where to collect agent evidence such as crash.log "
-                         "(default: evidence/<task>/<timestamp>_e2e, outside agent_output/).")
+                         "(default: evidence/<task>/<model>/<timestamp>_e2e, outside agent_output/).")
     ap.add_argument("--output-dir", default=None,
-                    help="Output directory (default: agent_output/<task>/<timestamp>)")
+                    help="Output directory (default: agent_output/<task>/<model>/<timestamp>_e2e)")
     ap.add_argument("--claude-subscription", action="store_true",
                     help="Route the agent through the host Claude Code OAuth bridge "
                          "(scripts/claude_oauth) using your Max/Pro subscription. "
                          "Forces --model-provider anthropic.")
     ap.add_argument("--cc-bridge-port", type=int, default=None,
-                    help="Fixed host port for the host-side bridge, Claude subscription or GLM "
-                         "(default: ephemeral free port).")
+                    help="Fixed host port for the bridge (default: ephemeral free port).")
     ap.add_argument("--cc-bridge-secret", default=None,
-                    help="Pin the host-side bridge shared secret (default: random per run).")
+                    help="Pin the bridge shared secret (default: random per run).")
 
     # --- Finance API (opt-in usage tracking, never affects scoring) ---
     ap.add_argument("--finance-api-url", default=os.environ.get("FINANCE_API_URL"),
@@ -1614,29 +1690,31 @@ def main():
     instruction = (task_dir / "instruction.md").read_text()
 
     if args.claude_subscription and args.model_provider == "glm":
-        sys.exit("ERROR: --claude-subscription and --model-provider glm are mutually exclusive "
-                 "(each starts its own host-side bridge)")
+        sys.exit("ERROR: --claude-subscription and --model-provider glm are mutually exclusive")
 
-    # Whichever host-side bridge this run starts (Claude subscription or GLM);
-    # stopped by the atexit hook below.
-    host_bridge = None
+    claude_bridge = None
+    codex_bridge_proc = None
     if args.claude_subscription:
-        host_bridge = start_claude_subscription_bridge(args)
+        claude_bridge = start_claude_subscription_bridge(args)
         if not getattr(args, 'finance_subscription_id', ''):
             sub_id = get_claude_subscription_id()
             if sub_id:
                 args.finance_subscription_id = sub_id
-    elif args.model_provider == "glm":
-        host_bridge = start_glm_bridge(args)
 
     llm_env, llm_model = get_llm_env(args)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     iter_suffix = f"_x{args.max_attempts}" if args.max_attempts > 1 else ""
+    # Each task is run by two agents side by side (Opus 5 on anthropic, GLM on
+    # Z.ai), so runs are grouped per model:
+    #   agent_output/<task>/<model>/<timestamp>_e2e/{output,trajectory,verifier}
+    # The evidence tree mirrors it.  The timestamp level keeps repeat runs of
+    # the same model from overwriting each other.
+    model_slug = run_model_slug(args, llm_model)
     if args.output_dir:
         run_dir = Path(args.output_dir)
     else:
-        run_dir = Path("agent_output") / task_name / f"{timestamp}_e2e{iter_suffix}"
+        run_dir = Path("agent_output") / task_name / model_slug / f"{timestamp}_e2e{iter_suffix}"
     run_dir.mkdir(parents=True, exist_ok=True)
     output_dir = run_dir / "output"
     output_dir.mkdir(exist_ok=True)
@@ -1648,7 +1726,7 @@ def main():
     if args.evidence_dir:
         evidence_dir = Path(args.evidence_dir)
     else:
-        evidence_dir = (Path(__file__).parent / "evidence" / task_name /
+        evidence_dir = (Path(__file__).parent / "evidence" / task_name / model_slug /
                         f"{timestamp}_e2e{iter_suffix}")
     repo_dir = task_repo_dir(task_dir)
 
@@ -1663,8 +1741,10 @@ def main():
     mode = task_mode(task_dir)
     print(f"Mode: {mode}")
     if not args.no_judge:
-        # The default judge is the local codex bridge; fail here, not after
-        # the agent has spent an hour, if it is not up.
+        # The default judge is the local codex bridge; auto-start it if it is
+        # not already up, then fail here (not after an hour of agent time) if it
+        # still is not reachable.
+        codex_bridge_proc = start_codex_judge_bridge(llm_env)
         ok, detail = judge_endpoint_reachable(llm_env)
         if ok:
             print(f"  Judge endpoint: {detail}")
@@ -1764,8 +1844,13 @@ def main():
             iso_target = (_h or "api.anthropic.com", (_urlparse(_bu).port if _bu else None) or 443, "api")
 
     def _stop_bridge():
-        if host_bridge is not None:
-            host_bridge.stop()
+        if claude_bridge is not None:
+            claude_bridge.stop()
+        if codex_bridge_proc is not None:
+            try:
+                codex_bridge_proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
 
     atexit.register(_stop_bridge)
 

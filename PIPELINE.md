@@ -36,7 +36,7 @@ Task Dir → Build Image → Agent Container → Kill Agent → Verifier Contain
 
 **Details:**
 - `docker run -d --rm --platform linux/amd64 -w /src <image> sleep infinity`
-- Container gets `--add-host host.docker.internal:host-gateway` (for the host-side OAuth or GLM bridge)
+- Container gets `--add-host host.docker.internal:host-gateway` (for OAuth bridge)
 - Working directory set to `/src`
 - Container named `harbor-<random-8-hex>`
 
@@ -65,8 +65,8 @@ Task Dir → Build Image → Agent Container → Kill Agent → Verifier Contain
     --dangerously-skip-permissions
   ```
 - Runs as `agent` user (not root)
-- Environment variables set: `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` (for the OAuth or GLM bridge)
-- Model: `claude-opus-5` (default); under `--model-provider glm` the GLM id (`glm-5.3` default) plus `ANTHROPIC_DEFAULT_{OPUS,SONNET,HAIKU}_MODEL` so the CLI's aliases resolve to GLM ids
+- Environment variables set: `ANTHROPIC_API_KEY` or `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` (for OAuth bridge; for `--model-provider glm` the Z.ai endpoint + the `~/.zai_api_key` credential + `API_TIMEOUT_MS=3000000`)
+- Model: `claude-opus-5` (default); under `--model-provider glm` none unless `--glm-model-id` pins one (Z.ai maps Claude ids to GLM server-side)
 - Timeout: 5400s (90 min default)
 - Disabled tools: WebFetch, WebSearch (no internet lookup allowed), Task, MCPSearch, NotebookEdit, Skill, AskUserQuestion
 - Output format: `stream-json` (JSONL — each line is a JSON event)
@@ -300,7 +300,7 @@ These are copied out of the container to the host.
 ## Output Directory Structure
 
 ```
-agent_output/<task>/<timestamp>_e2e/
+agent_output/<task>/<model>/<timestamp>_e2e/      # <model>: claude-opus-5, glm, ...
 ├── summary.json              # Full run summary
 ├── output/
 │   ├── poc.bin                # Agent's exploit (binary)

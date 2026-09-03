@@ -1,0 +1,309 @@
+#!/usr/bin/env python3
+"""glm-login — Sign in to Z.ai with your browser (like `claude /login`).
+
+Flow (same OAuth used by Z.ai's official ZCode CLI):
+  1. Starts a tiny localhost callback server on a random free port
+  2. Opens browser -> chat.z.ai login page (phone/email, however you log in)
+  3. After approval the browser redirects to http://127.0.0.1:<port>/callback
+     and the code is captured automatically (paste fallback if that fails)
+  4. Exchanges the code for tokens, then auto-creates/fetches a
+     GLM Coding Plan API key named 'glm-bridge' in your default project
+  5. Stores it in ~/.zai_api_key (chmod 600) — you never see or paste a key
+  6. If the OpenCode TUI is installed, also connects its built-in
+     'zai-coding-plan' provider (same key, models: zai-coding-plan/glm-*)
+
+Stdlib only. No dependencies. Works on macOS and Linux.
+"""
+
+import json
+import os
+import secrets
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import webbrowser
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+CLIENT_ID = "client_P8X5CMWmlaRO9gyO-KSqtg"
+AUTH_URL = "https://chat.z.ai/api/oauth/authorize"
+TOKEN_URL = "https://zcode.z.ai/api/v1/oauth/token"
+BIZ_LOGIN_URL = "https://api.z.ai/api/auth/z/login"
+CUSTOMER_URL = "https://api.z.ai/api/biz/customer/getCustomerInfo"
+KEY_NAME = "glm-bridge"
+KEY_FILE = os.path.expanduser("~/.zai_api_key")
+CALLBACK_TIMEOUT = 300  # seconds to wait for browser login
+
+UA_HEADERS = {
+    "Content-Type": "application/json",
+    "User-Agent": "ZCode/unknown",
+    "HTTP-Referer": "https://zcode.z.ai",
+}
+
+
+def http_json(url, payload=None, headers=None, method=None):
+    """POST/GET JSON, return parsed body. Raises RuntimeError with details."""
+    data = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(url, data=data, method=method or ("POST" if data else "GET"))
+    for k, v in (headers or UA_HEADERS).items():
+        req.add_header(k, v)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            return json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")[:500]
+        raise RuntimeError(f"HTTP {e.code} from {url}: {body}") from e
+
+
+def unwrap(envelope, what):
+    """Z.ai envelope: {code: 0|200, msg, data, success}."""
+    if isinstance(envelope, dict) and envelope.get("code") in (0, 200) and envelope.get("success", True):
+        return envelope.get("data", envelope)
+    msg = envelope.get("msg") if isinstance(envelope, dict) else envelope
+    raise RuntimeError(f"{what} failed: {msg}")
+
+
+def bearer(token):
+    h = dict(UA_HEADERS)
+    h["Authorization"] = f"Bearer {token}"
+    return h
+
+
+class CallbackHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        if parsed.path != "/callback":
+            self.send_response(404)
+            self.end_headers()
+            return
+        params = urllib.parse.parse_qs(parsed.query)
+        self.server.oauth_code = (params.get("code") or [None])[0]
+        self.server.oauth_state = (params.get("state") or [None])[0]
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.end_headers()
+        ok = self.server.oauth_code is not None
+        title = "✅ Signed in to Z.ai" if ok else "❌ Login failed"
+        note = "You can close this tab and return to your terminal." if ok else "No code received — return to terminal and retry."
+        self.wfile.write(
+            f"<html><body style='font-family:sans-serif;text-align:center;padding-top:80px'>"
+            f"<h1>{title}</h1><p>{note}</p></body></html>".encode())
+
+    def log_message(self, *_):  # silence request logs
+        pass
+
+
+def start_callback_server():
+    server = HTTPServer(("127.0.0.1", 0), CallbackHandler)
+    server.oauth_code = None
+    server.oauth_state = None
+    return server, server.server_address[1]
+
+
+def wait_for_callback(server, expected_state):
+    server.timeout = CALLBACK_TIMEOUT
+    deadline = time.time() + CALLBACK_TIMEOUT
+    while server.oauth_code is None and time.time() < deadline:
+        server.handle_request()
+    if server.oauth_code is None:
+        return paste_fallback(expected_state)
+    if server.oauth_state != expected_state:
+        raise RuntimeError("State mismatch — restart the login and use one browser tab.")
+    return server.oauth_code
+
+
+def paste_fallback(expected_state):
+    print("   Browser didn't hand the code back automatically.")
+    print("   Copy the FULL URL from the browser address bar after approving")
+    print("   (it looks like http://127.0.0.1:…/callback?code=…&state=…) and paste it:")
+    raw = input("   URL> ").strip()
+    parsed = urllib.parse.urlparse(raw)
+    params = urllib.parse.parse_qs(parsed.query)
+    code = (params.get("code") or [None])[0]
+    state = (params.get("state") or [None])[0]
+    if not code:
+        raise RuntimeError("No ?code= found in that URL.")
+    if state != expected_state:
+        raise RuntimeError("State mismatch — did you paste the URL from THIS login attempt?")
+    return code
+
+
+def pick_default(items):
+    if not items:
+        raise RuntimeError("Z.ai account has no organizations/projects — is the Coding Plan active?")
+    for it in items:
+        if it.get("isDefault"):
+            return it
+    return items[0]
+
+
+def extract_key_list(data):
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for k in ("list", "keys", "apiKeys", "records", "data"):
+            if isinstance(data.get(k), list):
+                return data[k]
+    return []
+
+
+def mint_key(biz_token):
+    """Find-or-create the 'glm-bridge' coding-plan API key, return full id.secret."""
+    info = unwrap(http_json(CUSTOMER_URL, headers=bearer(biz_token)), "Fetch account info")
+    org = pick_default(info.get("organizations") or [])
+    proj = pick_default(org.get("projects") or [])
+    org_id, proj_id = org.get("organizationId") or org.get("id"), proj.get("projectId") or proj.get("id")
+    keys_url = f"https://api.z.ai/api/biz/v1/organization/{org_id}/projects/{proj_id}/api_keys"
+
+    existing = extract_key_list(unwrap(http_json(keys_url, headers=bearer(biz_token)), "List API keys"))
+    record = next((k for k in existing if k.get("name") == KEY_NAME), None)
+    if record is None:
+        record = unwrap(http_json(keys_url, {"name": KEY_NAME}, headers=bearer(biz_token)), "Create API key")
+        print(f"🔑 Created new key '{KEY_NAME}' in project {proj.get('projectName') or proj_id}")
+    else:
+        print(f"🔑 Reusing existing key '{KEY_NAME}'")
+
+    api_key_id = record.get("apiKey") or record.get("key") or record.get("id")
+    if not api_key_id:
+        raise RuntimeError(f"Could not find apiKey id in record: {record}")
+
+    copy_url = f"{keys_url}/copy/{urllib.parse.quote(str(api_key_id), safe='')}"
+    copied = unwrap(http_json(copy_url, headers=bearer(biz_token)), "Fetch key secret")
+    secret = copied.get("secretKey") if isinstance(copied, dict) else None
+    if not secret:
+        raise RuntimeError(f"Copy endpoint returned no secretKey: {copied}")
+    return f"{api_key_id}.{secret}"
+
+
+def opencode_auth_file():
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(data_home, "opencode", "auth.json")
+
+
+def register_opencode(full_key):
+    """Best-effort: sign the OpenCode TUI into the same plan (provider: zai-coding-plan)."""
+    auth_path = opencode_auth_file()
+    if not os.path.isdir(os.path.dirname(auth_path)):
+        return  # OpenCode not installed — nothing to do
+    try:
+        auth = {}
+        if os.path.exists(auth_path):
+            with open(auth_path) as f:
+                auth = json.load(f)
+        auth["zai-coding-plan"] = {"type": "api", "key": full_key}
+        tmp = auth_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(auth, f, indent=2)
+            f.write("\n")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, auth_path)
+        print("🖥️  OpenCode TUI connected too — pick a zai-coding-plan/glm-* model (restart opencode)")
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️  Could not auto-configure OpenCode ({e})")
+        print("   Manual fallback: opencode auth login → 'Z.AI Coding Plan' → paste: cat ~/.zai_api_key")
+
+
+def verify_key(full_key):
+    """One tiny request against the Anthropic-compatible endpoint."""
+    try:
+        req = urllib.request.Request(
+            "https://api.z.ai/api/anthropic/v1/messages",
+            data=json.dumps({"model": "claude-sonnet-4-20250514", "max_tokens": 16,
+                             "messages": [{"role": "user", "content": "Say OK"}]}).encode(),
+            headers={"Content-Type": "application/json", "x-api-key": full_key,
+                     "anthropic-version": "2023-06-01"})
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            model = json.loads(resp.read().decode()).get("model", "?")
+        print(f"✅ Live test OK — Z.ai answered as model: {model}")
+        return True
+    except Exception as e:  # noqa: BLE001
+        print(f"⚠️  Key saved, but live test failed: {e}")
+        print("   (Quota window or endpoint hiccup — try `glm` anyway.)")
+        return False
+
+
+APIKEY_PAGE = "https://z.ai/manage-apikey/apikey-list"
+
+
+def save_and_wire(full_key):
+    with open(KEY_FILE, "w") as f:
+        f.write(full_key + "\n")
+    os.chmod(KEY_FILE, 0o600)
+    print(f"💾 Credential stored in {KEY_FILE} (600)")
+    verify_key(full_key)
+    register_opencode(full_key)
+    print("\n🎉 Done! Run:  glm        → Claude Code on your Z.ai plan")
+    print("           opencode   → TUI: /models → zai-coding-plan/glm-*")
+    print("           claude     → your normal Claude subscription (untouched)")
+
+
+def paste_key_login():
+    print("🔑 GLM Login (paste-key) — the simple, official way")
+    print("   1. Open this page and sign in to Z.ai:")
+    print(f"      {APIKEY_PAGE}")
+    print("   2. Click '+ Create a new API key' (or copy an existing one).")
+    print("   3. Paste the full key below (it looks like 'xxxxx.yyyyy').\n")
+    try:
+        webbrowser.open(APIKEY_PAGE)
+    except Exception:  # noqa: BLE001
+        pass
+    key = input("   API key> ").strip()
+    if not key or "." not in key:
+        raise RuntimeError("That doesn't look like a Z.ai API key (expected 'id.secret').")
+    save_and_wire(key)
+
+
+def main():
+    if "--paste-key" in sys.argv[1:] or "--key" in sys.argv[1:]:
+        paste_key_login()
+        return
+    print("🥷 GLM Login — authenticate with your Z.ai account (Coding Plan)")
+    print("   (Tip: if the browser flow fails, run `glm login --paste-key` to just paste a dashboard key.)\n")
+    state = secrets.token_hex(16)
+    server, port = start_callback_server()
+    redirect_uri = f"http://127.0.0.1:{port}/callback"
+    auth_url = AUTH_URL + "?" + urllib.parse.urlencode({
+        "response_type": "code",
+        "client_id": CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "state": state,
+    })
+    print("🌐 Opening browser for Z.ai sign-in…")
+    print(f"   If it doesn't open, visit:\n   {auth_url}\n")
+    print(f"   ⏳ Waiting for the login callback on {redirect_uri} …\n")
+    webbrowser.open(auth_url)
+
+    try:
+        code = wait_for_callback(server, state)
+    finally:
+        server.server_close()
+    print("🔄 Exchanging login code for tokens…")
+    tok = unwrap(http_json(TOKEN_URL, {
+        "provider": "zai", "code": code,
+        "redirect_uri": redirect_uri, "state": state,
+    }), "Token exchange")
+    access_token = (tok.get("zai") or {}).get("access_token") or tok.get("access_token")
+    if not access_token:
+        raise RuntimeError(f"No access_token in token response: {tok}")
+
+    biz = unwrap(http_json(BIZ_LOGIN_URL, {"token": access_token}), "Z.ai business login")
+    biz_token = biz.get("access_token")
+    if not biz_token:
+        raise RuntimeError(f"No business access_token: {biz}")
+
+    full_key = mint_key(biz_token)
+    save_and_wire(full_key)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\nCancelled.")
+        sys.exit(130)
+    except RuntimeError as e:
+        print(f"\n❌ {e}")
+        print("\n👉 Easiest fix — skip the browser flow and paste a dashboard key instead:")
+        print("     glm login --paste-key")
+        sys.exit(1)
