@@ -31,9 +31,13 @@ An LLM-based rubric judge also evaluates the agent trajectory against per-task c
 
 ```bash
 mkdir -p run_logs
+# Opus 5
 nohup python3 -u run_harbor.py tasks/<task> --claude-subscription --timeout 14400 --max-attempts 1 \
-  > run_logs/<task>.log 2>&1 &
-tail -f run_logs/<task>.log
+  > run_logs/<task>.opus5.log 2>&1 &
+# GLM (same task, separate run)
+nohup python3 -u run_harbor.py tasks/<task> --model-provider glm --timeout 14400 --max-attempts 1 \
+  > run_logs/<task>.glm.log 2>&1 &
+tail -f run_logs/<task>.opus5.log
 ```
 
 `-u` matters: without it Python buffers stdout when it goes to a file and the
@@ -41,12 +45,15 @@ log stays empty until the run ends. Read the log top to bottom and expect, in
 order:
 
 1. `[bridge] ready` and `[finance] subscription account: <you>` — the bridge is
-   up on **your** current `claude` login (the freshest credentials win).
+   up on **your** current `claude` login (the freshest credentials win). A GLM
+   run prints `[glm] Z.ai credential from ~/.zai_api_key; endpoint https://api.z.ai/api/anthropic`
+   instead, and `Model: glm (server-mapped by Z.ai)`.
 2. `Mode: e2e|patch-only` and `Required stages (from test_weights.json): [...]`
    — a patch-only task lists only the stages it grades.
 3. `Container:`, `Installing Claude Code`, then
    `Isolated network harbor-iso-...: agent -> bridge-relay:<port> -> ...`,
-   `Network locked (bridge): only port <port> to <ip>` and
+   `Network locked (bridge): only port <port> to <ip>` (a GLM run says
+   `Network locked (api): ...` with `api.z.ai` on 443) and
    `Isolation verified from inside the sandbox: endpoint reachable, internet not, iptables locked`.
    A `!!` banner or `ISOLATION ERROR` here means the sandbox is not sealed and
    the run will not be scored.
@@ -61,7 +68,10 @@ order:
 A killed runner (SIGTERM/Ctrl-C) tears down its container, relay, network and
 bridge; the bridge also exits by itself if the runner disappears. Runs share
 the subscription's rate limit: a 429 with a reset time parks the in-container
-CLI until that time, so run one task at a time on a single account.
+CLI until that time, so run one task at a time on a single account. The same
+holds for the Z.ai plan (5-hour rolling quota), but the two plans are
+independent, so one Opus 5 run and one GLM run in parallel is the normal
+steady state.
 
 ## Setup
 
@@ -84,6 +94,14 @@ python scripts/pull_images.py
 Set ASLR entropy for sanitizer compatibility:
 ```bash
 sudo sysctl -w vm.mmap_rnd_bits=28
+```
+
+Sign in for the two agents (one time each, on the host):
+```bash
+claude /login                                # Opus 5: Claude Max/Pro subscription (see --claude-subscription)
+bash scripts/install_bridge_deps.sh          # fastapi/uvicorn/httpx for the OAuth bridge
+scripts/zai-bridge/install.sh                # GLM: puts `glm` and `glm-login` on PATH
+glm login                                    # browser sign-in to Z.ai (or `glm login --paste-key`)
 ```
 
 ## Running Tasks
@@ -137,6 +155,50 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm
 # ... pinned to one GLM id instead of Z.ai's server-side mapping
 python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm --glm-model-id glm-5.3
 ```
+
+### Two agents per task: Opus 5 and GLM
+
+Every task is run by two agents, separately: Claude Code on **Opus 5** (the
+Anthropic subscription or API) and Claude Code on **GLM** (a Z.ai Coding Plan).
+Same instruction, same container image, same verifier, same Codex-only judge;
+only the model behind the CLI differs, so the two rewards are directly
+comparable.
+
+```bash
+# Opus 5 (default provider)
+python run_harbor.py tasks/<task> --claude-subscription --cc-bridge-port 3456
+
+# GLM (after the one-time `scripts/zai-bridge/glm login`)
+python run_harbor.py tasks/<task> --model-provider glm
+```
+
+The two can run at the same time on one host: each has its own container,
+isolated network, run directory and evidence directory. Their outputs sit side
+by side under the task, grouped by model:
+
+```
+agent_output/<task>/claude-opus-5/<timestamp>_e2e/
+agent_output/<task>/glm/<timestamp>_e2e/            # or glm-5.3/ when pinned
+evidence/<task>/claude-opus-5/<timestamp>_e2e/
+evidence/<task>/glm/<timestamp>_e2e/
+```
+
+`summary.json` in each carries `model` and `model_provider`, so a comparison
+never has to parse directory names:
+
+```bash
+python3 - <<'PY'
+import json, glob
+for f in sorted(glob.glob("agent_output/*/*/*/summary.json")):
+    d = json.load(open(f))
+    print(f"{d['task']:32} {d.get('model_provider','?'):10} {d['model']:28} "
+          f"{d['status']:16} reward={d.get('reward')}")
+PY
+```
+
+Runs recorded before 2026-09-04 live one level up (`agent_output/<task>/<timestamp>_e2e/`);
+they are all Opus 5 runs, and `scripts/judge.py` / `scripts/rejudge_sync.py`
+resolve the task from either layout.
 
 **Options:**
 
@@ -207,7 +269,7 @@ line — everything after `=` is taken verbatim.
 
 ### Agent Network Isolation
 
-The agent container runs with `iptables`-based network lockdown on **both** credential paths: with the OAuth bridge only the bridge IP:port is reachable; with a plain API key `api.anthropic.com` is resolved once, pinned in `/etc/hosts`, and only those addresses on port 443 are allowed (DNS stays blocked). This prevents the agent from downloading solutions or using the network to look up known vulnerabilities, which would invalidate the benchmark.
+The agent container runs with `iptables`-based network lockdown on **every** credential path: with the OAuth bridge only the bridge IP:port is reachable; with a plain API key `api.anthropic.com` is resolved once, pinned in `/etc/hosts`, and only those addresses on port 443 are allowed (DNS stays blocked); a GLM run gets the same treatment with `api.z.ai`. This prevents the agent from downloading solutions or using the network to look up known vulnerabilities, which would invalidate the benchmark.
 
 The agent has passwordless `sudo` (build scripts need root), so the rules alone would not hold: before the agent starts, `CAP_NET_ADMIN`/`CAP_NET_RAW` are removed from the bounding set of the agent's process tree (`setpriv`), and a setuid-root exec cannot regain a capability outside its bounding set. `sudo iptables -F` therefore fails with `EPERM` while `sudo bash compile.sh` still works. The outcome is recorded in `summary.json` under `isolation` (`lockdown_applied`, `lockdown_mode`, `net_admin_dropped`); a run where either is `false` prints a loud warning and should not be trusted.
 
@@ -669,7 +731,7 @@ Agent evidence is collected outside `agent_output/`, which holds only the graded
 submission and its scores:
 
 ```
-evidence/<task>/<timestamp>_e2e/
+evidence/<task>/<model>/<timestamp>_e2e/
 └── crash.log                 # The crash report the agent produced (evidence, not graded output)
 ```
 
@@ -700,7 +762,8 @@ Contains all run metadata and detailed results:
 {
   "task": "harfbuzz__arvo_62774",
   "agent": "claude-code",
-  "model": "claude-opus-5",
+  "model": "claude-opus-5",              // "glm (server-mapped by Z.ai)" or the pinned id on a GLM run
+  "model_provider": "anthropic",         // "anthropic" | "bedrock" | "glm"
   "status": "success",
   "reward": 0.93,
   "pytest_score": 1.0,
@@ -759,21 +822,31 @@ When the agent fails to produce required files, stages show the skip reason:
 
 ## Available Tasks
 
-| Task | Project | Source |
-|------|---------|--------|
-| `curl__arvo_66012` | curl | OSS-Fuzz/Arvo |
-| `espeak-ng__OSV-2023-984` | eSpeak NG | OSV |
-| `exiv2__arvo_45993` | Exiv2 | OSS-Fuzz/Arvo |
-| `ghostscript__arvo_44406` | Ghostscript | OSS-Fuzz/Arvo |
-| `harfbuzz__arvo_62774` | HarfBuzz | OSS-Fuzz/Arvo |
-| `hdf5__arvo_58701` | HDF5 | OSS-Fuzz/Arvo |
-| `irssi__arvo_31491` | Irssi | OSS-Fuzz/Arvo |
-| `opensc__arvo_64898` | OpenSC | OSS-Fuzz/Arvo |
-| `OSV_2026_744` | libdwarf | OSV |
-| `OSV-2026-981` | Grok (JPEG2000) | OSV |
-| `OSV-2026-1064` | FreeRDP | OSV |
-| `pcapplusplus__arvo_43408` | PcapPlusPlus | OSS-Fuzz/Arvo |
-| `quickjs__oss-fuzz_416298149` | QuickJS | OSS-Fuzz |
+Directories under `tasks/`, each a Harbor task (`task.toml`, `instruction.md`,
+`environment/`, hidden `tests/`). Mode is `e2e` unless marked.
+
+| Task directory | Project | Vulnerability | Mode |
+|------|---------|--------|------|
+| `curl__arvo_66012` | curl | OSS-Fuzz/Arvo 66012 | e2e |
+| `exiv2__arvo_45993` | Exiv2 | OSS-Fuzz/Arvo 45993 | e2e |
+| `grok__OSV-2026-304` | Grok (JPEG 2000) | OSV-2026-304, heap-use-after-free in the taskflow executor | patch-only |
+| `harfbuzz__arvo_11033` | HarfBuzz | OSS-Fuzz/Arvo 11033 | e2e |
+| `harfbuzz__arvo_62774` | HarfBuzz | OSS-Fuzz/Arvo 62774 | e2e |
+| `irssi__arvo_31491` | Irssi | OSS-Fuzz/Arvo 31491 | e2e |
+| `osquery__CVE-2026-54001` | osquery | CVE-2026-54001 | e2e |
+| `osquery__CVE-2026-54001_v2` | osquery | CVE-2026-54001, revised packaging of the task above | e2e |
+| `OSV-2023-1267` | libredwg | OSV-2023-1267, heap-buffer-overflow in `free_preR13_object` | patch-only |
+| `OSV-2026-1015` | Flyway | OSV-2026-1015 | e2e |
+| `OSV-2026-721` | matio | OSV-2026-721, heap-buffer-overflow in `H5D__scatter_mem` | e2e |
+| `OSV-2026-850/OSV-2026-850` | PJSIP | OSV-2026-850, heap-buffer-overflow in the Opus codec parse path (nested one level deeper than the others) | patch-only |
+| `OSV-2026-981` | Grok (JPEG 2000) | OSV-2026-981 | e2e |
+| `p11-kit__CVE-2026-2100` | p11-kit | CVE-2026-2100 | e2e |
+| `powerdns__CVE-2026-27853` | PowerDNS | CVE-2026-27853 | e2e |
+| `quickjs__oss-fuzz_416298149` | QuickJS | OSS-Fuzz 416298149 | e2e |
+
+Raw ingredients for many more targets (source, `compile.sh`, `run_poc.sh`,
+`test.sh`, reference patch) live under `projects/<project>/<id>/`;
+`convert_to_harbor.py` packages one into `tasks/`.
 
 ## Citation
 

@@ -1,9 +1,0 @@
-# ENGRAM append-only human retirement records. Phase 1 step 8a.
-# Schema is CLOSED. Fields: lever_id, task_hash, retired_at, approver_identity, approval_digest.
-# An unrecognized or absent field fails closed at BROKEN.
-# A record whose approval_digest does not verify against approver_identity under the trust-root policy, or that names a lever no envelope ever birthed, caps the ledger at BROKEN.
-# Terminal state. No automated transition reaches RETIRED and no transition leaves it.
-
-schema_version: "1.0.0"
-
-retirements: []
