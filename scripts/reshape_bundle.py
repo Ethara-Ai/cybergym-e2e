@@ -108,6 +108,8 @@ def _usage_from(traj_json: dict, rubric: dict) -> dict:
     # Single judge seat -> one 'primary' member, so the shape matches the
     # reference's multi-member council.
     judge["per_member"] = {"primary": {"model": (rubric or {}).get("judge_model"), **judge_core}}
+    # Per-trial audit breakdown (each usable trial's tokens/cost; sums to the total).
+    judge["per_trial"] = ju.get("per_trial", [])
 
     combined = {
         "input_tokens": agent["input_tokens"] + judge["input_tokens"],

@@ -1040,6 +1040,26 @@ def evaluate_rubric(task_dir, trajectory_log, llm_env=None, model=None):
         judge_model, totals["input_tokens"], totals["output_tokens"],
         totals["cache_creation_input_tokens"], totals["cache_read_input_tokens"]), 6)
     usage["cost_known"] = bool(pricing_known(judge_model)) and cost_estimation_enabled()
+    # Per-trial breakdown (audit view). The aggregate above stays the single
+    # billing figure; these rows are each usable trial's own tokens/cost and sum
+    # back to it, so a reader can see the per-call detail behind the one line
+    # without the total being fragmented.
+    usage["per_trial"] = [
+        {
+            "trial": i + 1,
+            "score": round(r.get("score", 0.0), 6),
+            "input_tokens": r["usage"].get("input_tokens", 0),
+            "output_tokens": r["usage"].get("output_tokens", 0),
+            "cache_read_tokens": r["usage"].get("cache_read_input_tokens", 0),
+            "cache_write_tokens": r["usage"].get("cache_creation_input_tokens", 0),
+            "cost_usd": round(estimate_cost_usd(
+                judge_model,
+                r["usage"].get("input_tokens", 0), r["usage"].get("output_tokens", 0),
+                r["usage"].get("cache_creation_input_tokens", 0),
+                r["usage"].get("cache_read_input_tokens", 0)), 6),
+        }
+        for i, r in enumerate(trial_results)
+    ]
 
     print(f"  Rubric judge: {len(trial_results)}/{num_trials} trials succeeded")
     print(f"    scores: {[round(s, 4) for s in scores]}")
