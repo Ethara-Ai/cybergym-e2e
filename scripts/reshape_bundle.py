@@ -77,26 +77,56 @@ def _discover_attempts(run_dir: Path):
 
 
 def _usage_from(traj_json: dict, rubric: dict) -> dict:
+    """Per-run usage record in the reference bundle shape: combined top-level
+    totals + a `sources` split (agent / judge), the judge broken down
+    `per_member` (kakashi runs a single judge seat, exposed as `primary`), plus
+    accounting `notes`. All values are derived from the run's own artifacts
+    (`trajectory.json` final_metrics + `rubric_score.json` judge_usage)."""
     fm = (traj_json or {}).get("final_metrics", {}) or {}
     ju = (rubric or {}).get("judge_usage", {}) or {}
+
+    def _i(v):
+        return int(v or 0)
+
+    agent = {
+        "input_tokens": _i(fm.get("total_prompt_tokens")),
+        "output_tokens": _i(fm.get("total_completion_tokens")),
+        "cache_read_tokens": _i(fm.get("total_cached_tokens")),
+        "cache_write_tokens": _i(fm.get("total_cache_creation_tokens")),
+        "cost_usd": round(float(fm.get("total_cost_usd") or 0.0), 6),
+    }
+    judge_core = {
+        "input_tokens": _i(ju.get("input_tokens")),
+        "output_tokens": _i(ju.get("output_tokens")),
+        "cache_read_tokens": _i(ju.get("cache_read_input_tokens")),
+        "cache_write_tokens": _i(ju.get("cache_creation_input_tokens")),
+        "request_count": _i((rubric or {}).get("trials_succeeded")),
+        "cost_usd": round(float(ju.get("cost_usd") or 0.0), 6),
+    }
+    judge = dict(judge_core)
+    judge["cost_known"] = bool(ju.get("cost_known"))
+    # Single judge seat -> one 'primary' member, so the shape matches the
+    # reference's multi-member council.
+    judge["per_member"] = {"primary": {"model": (rubric or {}).get("judge_model"), **judge_core}}
+
+    combined = {
+        "input_tokens": agent["input_tokens"] + judge["input_tokens"],
+        "output_tokens": agent["output_tokens"] + judge["output_tokens"],
+        "cache_read_tokens": agent["cache_read_tokens"] + judge["cache_read_tokens"],
+        "cache_write_tokens": agent["cache_write_tokens"] + judge["cache_write_tokens"],
+        "cost_usd": round(agent["cost_usd"] + judge["cost_usd"], 6),
+    }
     return {
-        "agent": {
-            "prompt_tokens": fm.get("total_prompt_tokens"),
-            "completion_tokens": fm.get("total_completion_tokens"),
-            "cached_tokens": fm.get("total_cached_tokens"),
-            "cache_creation_tokens": fm.get("total_cache_creation_tokens"),
-            "cost_usd": fm.get("total_cost_usd"),
-            "num_turns": fm.get("num_turns"),
-            "duration_ms": fm.get("duration_ms"),
-        },
-        "judge": {
-            "input_tokens": ju.get("input_tokens"),
-            "output_tokens": ju.get("output_tokens"),
-            "cache_read_input_tokens": ju.get("cache_read_input_tokens"),
-            "cache_creation_input_tokens": ju.get("cache_creation_input_tokens"),
-            "cost_usd": ju.get("cost_usd"),
-            "cost_known": ju.get("cost_known"),
-        },
+        **combined,
+        "sources": {"agent": agent, "judge": judge},
+        "notes": [
+            "agent.input_tokens is the full prompt size (includes cache_read_tokens + "
+            "cache_write_tokens), so combined top-level counts agent cache inside input_tokens "
+            "as well as in the cache_* fields.",
+            "judge runs on the codex path (gpt-5.6-sol), which reports no prompt-cache tokens, "
+            "so judge.cache_* are 0.",
+            "judge.request_count is the number of usable rubric trials (adaptive: 3-11).",
+        ],
     }
 
 
