@@ -64,9 +64,11 @@ def _rates_for(model_name):
     if model_name in overrides:
         return overrides[model_name]
     low = model_name.lower()
-    for key, rates in overrides.items():      # dated snapshot of an override
+    # Longest key first so a specific override (e.g. "gpt-5.2") is not shadowed
+    # by a shorter prefix ("gpt-5") that happens to come earlier in insertion order.
+    for key in sorted(overrides, key=len, reverse=True):
         if low.startswith(key.lower()):
-            return rates
+            return overrides[key]
     return _judge_lib.pricing_for(model_name)
 
 
@@ -163,10 +165,22 @@ def _read_trajectory_metrics(run_dir):
             try:
                 data = json.loads(f.read_text())
                 metrics = data.get("final_metrics", {})
-                total_input += metrics.get("total_prompt_tokens", 0)
+                prompt = metrics.get("total_prompt_tokens", 0) or 0
+                cache_read = metrics.get("total_cached_tokens", 0) or 0
+                cache_write = metrics.get("total_cache_creation_tokens", 0) or 0
+                # run_harbor writes total_prompt_tokens as the FULL prompt size
+                # (uncached input + cache reads + cache creation), while
+                # _cost_usd and the Finance API both bill input separately from
+                # the cache fields.  Posting the inclusive figure bills every
+                # cached token twice -- 5.8x on a cache-heavy run.  Subtract the
+                # cache sides back out.  Trajectories written before that change
+                # already carry the exclusive figure; they make this go negative,
+                # which is the signal to use it as-is.
+                fresh = prompt - cache_read - cache_write
+                total_input += fresh if fresh >= 0 else prompt
                 total_output += metrics.get("total_completion_tokens", 0)
-                total_cache_input += metrics.get("total_cached_tokens", 0)
-                total_cache_write += metrics.get("total_cache_creation_tokens", 0) or 0
+                total_cache_input += cache_read
+                total_cache_write += cache_write
             except Exception:
                 continue
 
@@ -263,8 +277,12 @@ def post_run_usage(finance_url, run_dir, task_name, timestamp, model_name,
             "judge_lines": [],
         }
 
-        # Add judge line if we have judge usage data
-        if judge_input > 0 or judge_output > 0 or judge_cache_write > 0:
+        # Add judge line if we have judge usage data.  cache-read-only usage
+        # counts too: a judge call served entirely from the prompt cache has
+        # judge_cache_input > 0 with input/output/cache_write near zero, and
+        # omitting it here would post no judge cost for that (real) spend.
+        if (judge_input > 0 or judge_output > 0
+                or judge_cache_write > 0 or judge_cache_input > 0):
             judge_model = judge_model or "claude-sonnet-4-20250514"
             payload["judge_lines"].append({
                 "model_name": judge_model,

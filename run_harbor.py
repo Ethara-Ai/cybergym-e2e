@@ -31,7 +31,7 @@ Usage:
         --model-provider bedrock \\
         --bedrock-model-id $BEDROCK_MODEL_ID --aws-region us-west-2
 
-    # GLM on a Z.ai Coding Plan (sign in once: scripts/zai-bridge/glm login)
+    # GLM on a Z.ai Coding Plan (sign in once: run_harbor.py login --glm)
     python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm
 
     # Multiple attempts with feedback
@@ -123,6 +123,41 @@ PLATFORM = os.environ.get("PLATFORM", "linux/amd64")
 
 REPORT_GENERATOR_PATH = Path(__file__).parent / "generate_report.py"
 
+# Path segments that anchor a machine-independent, repo-relative path.  The
+# first of these seen in a path marks where the host-specific prefix ends.
+_PATH_ANCHORS = ("delivery_output", "agent_output", "evidence", "output",
+                 "input", "tasks", "jobs", "data")
+
+
+def _short_path(p):
+    """Machine-independent form of a path for summary.json (modelled on yuji's
+    path masking): cut a host-absolute path to anchor-relative form
+    (`/Users/x/.../agent_output/t` -> `agent_output/t`); if no anchor is
+    present, replace a `/Users/<name>` or `/home/<name>` head with `~`.
+    Container paths (/workspace, /logs, /tmp) are left verbatim."""
+    parts = Path(str(p)).parts
+    for i, seg in enumerate(parts):
+        if seg in _PATH_ANCHORS:
+            return str(Path(*parts[i:]))
+    return re.sub(r"^/(?:Users|home)/[^/]+", "~", str(p))
+
+
+def pass_at_k(n, c, k):
+    """Unbiased pass@k estimator (Chen et al. 2021, "Evaluating Large Language
+    Models Trained on Code").
+
+    Probability that at least one of k samples drawn without replacement from n
+    total samples passes, given that c of the n passed.  This is the standard
+    estimator (not the naive 1 - (1 - c/n)**k), and is exact for the sampling
+    we do: n independent attempts of the same task, c of which solved it.
+    """
+    from math import comb
+    if n <= 0 or k > n:
+        return 0.0
+    if n - c < k:          # too few failures to fill a k-subset -> guaranteed pass
+        return 1.0
+    return 1.0 - comb(n - c, k) / comb(n, k)
+
 # Isolation facts for the current run, recorded into summary.json so a run
 # whose lockdown could not be applied is identifiable later (R-06 / R-07).
 ISOLATION = {
@@ -211,16 +246,24 @@ def is_report_based_task(task_dir):
 
 DEFAULT_AGENT_MODEL = "claude-opus-5"
 DEFAULT_MODEL_PROVIDER = "anthropic"
-# GLM (Z.ai Coding Plan) via scripts/zai-bridge: Claude Code talks to Z.ai's
+# GLM (Z.ai Coding Plan) via the vendored zbridge: Claude Code talks to a
 # Anthropic-compatible endpoint directly with the credential `glm login`
-# stores in ~/.zai_api_key.  Z.ai maps Claude model ids to GLM server-side
-# (opus/sonnet -> its current best GLM, haiku -> a light model), so the
-# default is to send no model id and record what Z.ai answered as.
+# stores in ~/.zai_api_key.  The model is PINNED: measured 2026-09-04, Z.ai
+# maps every Claude id (opus-5, sonnet-5, haiku) to glm-5.3-flash, the small
+# model, so relying on the server-side mapping would benchmark the wrong
+# model.  GLM_MODEL_ID="" opts back into server mapping (recorded as such).
 ZAI_ANTHROPIC_BASE_URL = "https://api.z.ai/api/anthropic"
 ZAI_KEY_FILE = Path.home() / ".zai_api_key"
+REPO_ROOT_ENV = Path(__file__).resolve().parent / ".env"
+# What the vendored zbridge talks to.  NOT ZAI_ANTHROPIC_BASE_URL: that is
+# z.ai's own Anthropic shim, which does not front the Coding Plan and whose
+# streamed message_start reports zero input tokens.  zbridge speaks the
+# OpenAI-compat Coding Plan schema instead and maps usage itself.
+ZBRIDGE_UPSTREAM = "https://api.z.ai/api/coding/paas/v4/chat/completions"
 GLM_SERVER_MAPPED = "glm (server-mapped by Z.ai)"
-DEFAULT_GLM_MODEL = ""          # "" = server-mapped; set to pin, e.g. glm-5.3
-DEFAULT_GLM_API_TIMEOUT_MS = "3000000"   # zai-bridge's setting: GLM turns can take minutes
+DEFAULT_GLM_MODEL = "glm-5.3"            # main agent model (opus/sonnet aliases too)
+DEFAULT_GLM_SMALL_MODEL = "glm-5.3-flash"  # the CLI's haiku-tier background calls
+DEFAULT_GLM_API_TIMEOUT_MS = "3000000"   # GLM turns can take minutes
 DEFAULT_BEDROCK_MODEL = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
 DEFAULT_AWS_REGION = "us-west-2"
 
@@ -368,6 +411,17 @@ exit 0
     problems = [l for l in (out or "").splitlines() if l.startswith("PROBE:") and l != "PROBE: OK"]
     if code != 0 and not problems:
         problems = [f"PROBE: probe failed to run (exit {code}): {(err or '')[-200:]}"]
+    # Require the probe's positive confirmation, not merely the absence of
+    # problem lines. The probe prints "PROBE: OK" only when every check ran and
+    # passed, yet it always exits 0 -- so a probe that ran but emitted nothing
+    # (or was cut short) would otherwise read as isolated. Demand the sentinel
+    # and fail closed when it is missing and nothing else was flagged. The
+    # message deliberately omits "default route" so it is always a HARD problem
+    # (see the `hard` filter below), even outside the internal network.
+    ok_sentinel = any(l.strip() == "PROBE: OK" for l in (out or "").splitlines())
+    if not ok_sentinel and not problems:
+        problems = [f"PROBE: no positive confirmation from isolation probe "
+                    f"(exit {code}); treating sandbox as not isolated"]
     ISOLATION["verified"] = not problems
     ISOLATION["verify_reason"] = "; ".join(p[7:] for p in problems)
     # A default route is expected when not on the internal network; only the
@@ -610,8 +664,11 @@ for HOST in {" ".join(shlex.quote(h) for h in hosts)}; do
         IPS=$(dig +short "$HOST" A 2>/dev/null | grep -E '^[0-9]+\\.' | sort -u)
     fi
     if [ -z "$IPS" ]; then echo "could not resolve $HOST"; exit 5; fi
-    # Pin the resolution so the CLI works with DNS blocked.
-    sed -i "/ $HOST$/d" /etc/hosts
+    # Pin the resolution so the CLI works with DNS blocked.  /etc/hosts is a
+    # Docker bind mount: `sed -i` renames a temp file over it and fails with
+    # "Device or resource busy", so rewrite it in place instead.
+    grep -v " $HOST$" /etc/hosts > /tmp/hosts.new || true
+    cat /tmp/hosts.new > /etc/hosts
     for ip in $IPS; do echo "$ip $HOST" >> /etc/hosts; done
     ALLOW_IPS="$ALLOW_IPS $IPS"
 done
@@ -780,9 +837,9 @@ def _print_agent_event(event):
         print(f"  [agent] done: {text}")
 
 
-def get_llm_env(args):
+def get_llm_env(args, bridge=None):
     if args.model_provider == "glm":
-        return get_glm_env(args)
+        return get_glm_env(args, bridge)
     if args.model_provider == "bedrock":
         model = args.bedrock_model_id
         env = {
@@ -833,49 +890,142 @@ def run_model_slug(args, llm_model):
     return slug or args.model_provider
 
 
-def load_zai_key():
-    """The Z.ai credential, exactly as scripts/zai-bridge/glm reads it:
-    ~/.zai_api_key (written by `glm login`, whitespace stripped), else
-    ZAI_API_KEY from the environment/.env for hosts without a browser."""
+def resolve_zai_key():
+    """The Z.ai Coding Plan credential, from the first source that carries one.
+
+    Order, matching the reference harness's resolve_zai_key(): an explicit key
+    in the ENVIRONMENT, then the repo-root .env, then ~/.zai_api_key (what
+    `glm login` mints).  Environment first is the point: on CI or in a
+    container the credential is injected, and a stale key file left on the host
+    must not silently win over it.  Both spellings of the variable are
+    accepted -- ZB_ZAI_API_KEY is what zbridge itself reads, ZAI_API_KEY is
+    what this harness used before.
+
+    Returns (key, source) or (None, None); the caller decides whether a missing
+    credential is fatal, so `--model-provider glm` can report the provider as
+    unavailable instead of killing the process.
+    """
+    for var in ("ZB_ZAI_API_KEY", "ZAI_API_KEY"):
+        key = os.environ.get(var, "").strip()
+        if key:
+            return key, var
+    for var in ("ZB_ZAI_API_KEY", "ZAI_API_KEY"):
+        key = read_env_file(REPO_ROOT_ENV).get(var, "")
+        if key:
+            return key, f"{REPO_ROOT_ENV.name}:{var}"
     if ZAI_KEY_FILE.is_file():
         key = "".join(ZAI_KEY_FILE.read_text(errors="replace").split())
         if key:
             return key, str(ZAI_KEY_FILE)
-    key = os.environ.get("ZAI_API_KEY", "").strip()
+    return None, None
+
+
+def read_env_file(path):
+    """Parse a .env into a dict: `export K=v`, `K="v"`, `K='v'`, # comments.
+
+    Deliberately does NOT touch os.environ -- the caller decides precedence,
+    and here the real environment always outranks the file.
+    """
+    out = {}
+    try:
+        text = Path(path).read_text(errors="replace")
+    except OSError:
+        return out
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].lstrip()
+        k, _, v = line.partition("=")
+        k, v = k.strip(), v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        if k:
+            out[k] = v
+    return out
+
+
+def save_zai_key(full_key):
+    """Store a Z.ai Coding Plan key where resolve_zai_key() will find it.
+
+    The browser OAuth dance used to live in scripts/zai-bridge/glm-login, which
+    existed to point the *Claude Code CLI* straight at z.ai.  Runs go through
+    the vendored zbridge now, and zbridge needs only the key -- so this asks for
+    one directly rather than carrying a second sign-in implementation.
+    """
+    key = (full_key or "").strip()
+    if not key or "." not in key:
+        sys.exit("ERROR: that does not look like a Z.ai API key (expected id.secret)")
+    ZAI_KEY_FILE.write_text(key + "\n", encoding="utf-8")
+    ZAI_KEY_FILE.chmod(0o600)
+    print(f"  [glm] key stored in {ZAI_KEY_FILE} (0600)")
+
+
+def glm_login():
+    """`run_harbor.py login --glm`: prompt for a Z.ai key and store it."""
+    print("Z.ai GLM Coding Plan -- paste an API key to enable --model-provider glm.")
+    print("Create one at https://z.ai/manage-apikey/apikey-list")
+    try:
+        pasted = input("z.ai API key (id.secret): ")
+    except (EOFError, KeyboardInterrupt):
+        sys.exit("\nglm login aborted")
+    save_zai_key(pasted)
+    return 0
+
+
+def load_zai_key():
+    """resolve_zai_key(), but fatal when nothing is configured.
+
+    Kept for call sites that genuinely cannot continue without a credential.
+    """
+    key, source = resolve_zai_key()
     if key:
-        return key, "ZAI_API_KEY"
-    sys.exit("ERROR: not signed in to Z.ai (no ~/.zai_api_key and no ZAI_API_KEY).\n"
-             "       Run:  scripts/zai-bridge/glm login          (browser sign-in)\n"
-             "       or:   scripts/zai-bridge/glm login --paste-key")
+        return key, source
+    sys.exit("ERROR: not signed in to Z.ai.\n"
+             "       Set ZB_ZAI_API_KEY (environment or .env), or run:\n"
+             "         python3 run_harbor.py login --glm")
 
 
-def get_glm_env(args):
-    """Agent env for --model-provider glm: the same contract scripts/zai-bridge/glm
-    gives an interactive Claude Code session.
+def get_glm_env(args, bridge=None):
+    """Agent env for --model-provider glm.
 
     ANTHROPIC_AUTH_TOKEN carries the key (never ANTHROPIC_API_KEY, which makes
     Claude Code raise a trust prompt), ANTHROPIC_BASE_URL is Z.ai's Anthropic
     endpoint, and API_TIMEOUT_MS is raised because GLM turns can take minutes.
     The network lockdown resolves api.z.ai once and allows only it on 443, the
-    same "api" mode a plain Anthropic key gets.  No model id is sent unless
-    --glm-model-id pins one; Z.ai maps Claude ids to GLM server-side.
+    same "api" mode a plain Anthropic key gets.  The model is pinned to
+    --glm-model-id (default glm-5.3) via ANTHROPIC_MODEL and the CLI's
+    opus/sonnet aliases; the haiku alias gets GLM_SMALL_MODEL_ID.
     """
-    key, source = load_zai_key()
-    env = {
-        "ANTHROPIC_BASE_URL": ZAI_ANTHROPIC_BASE_URL,
-        "ANTHROPIC_AUTH_TOKEN": key,
-        "API_TIMEOUT_MS": os.environ.get("GLM_API_TIMEOUT_MS", "").strip() or DEFAULT_GLM_API_TIMEOUT_MS,
-    }
+    if bridge is not None:
+        # Through the vendored zbridge: the agent presents the bridge secret,
+        # never the z.ai key, which stays in the child process only.
+        env = {
+            "ANTHROPIC_BASE_URL": bridge.container_base_url,
+            "ANTHROPIC_AUTH_TOKEN": bridge.stub_api_key,
+            "ANTHROPIC_API_KEY": bridge.stub_api_key,
+            "API_TIMEOUT_MS": os.environ.get("GLM_API_TIMEOUT_MS", "").strip() or DEFAULT_GLM_API_TIMEOUT_MS,
+        }
+        source = "zbridge"
+    else:
+        key, source = load_zai_key()
+        env = {
+            "ANTHROPIC_BASE_URL": ZAI_ANTHROPIC_BASE_URL,
+            "ANTHROPIC_AUTH_TOKEN": key,
+            "API_TIMEOUT_MS": os.environ.get("GLM_API_TIMEOUT_MS", "").strip() or DEFAULT_GLM_API_TIMEOUT_MS,
+        }
     model = (args.glm_model_id or "").strip()
+    small = os.environ.get("GLM_SMALL_MODEL_ID", "").strip() or DEFAULT_GLM_SMALL_MODEL
     if model:
         env["ANTHROPIC_MODEL"] = model
         env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = model
         env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = model
-        small = os.environ.get("GLM_SMALL_MODEL_ID", "").strip()
-        if small:
-            env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = small
-    print(f"  [glm] Z.ai credential from {source}; endpoint {ZAI_ANTHROPIC_BASE_URL}; "
-          f"model {model or 'server-mapped'}")
+        env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = small
+    endpoint = bridge.container_base_url if bridge is not None else ZAI_ANTHROPIC_BASE_URL
+    print(f"  [glm] Z.ai credential from {source}; endpoint {endpoint}; "
+          f"model {model or 'server-mapped (glm-5.3-flash as of 2026-09-04)'}"
+          + (f", small {small}" if model else ""))
     return env, model or GLM_SERVER_MAPPED
 
 
@@ -1016,10 +1166,16 @@ def convert_jsonl_to_trajectory(log_path, output_path):
                         })
 
                 usage = msg.get("usage", {})
-                prompt_tokens = usage.get("input_tokens", 0) or 0
+                # Claude Code's usage.input_tokens counts only the *uncached*
+                # remainder of the prompt (often ~2); the bulk of the prompt is
+                # billed under cache read/creation.  Report the full prompt size
+                # instead: input + cache read + cache creation.  The cached and
+                # cache_creation breakdown is kept alongside it, so the uncached
+                # remainder is still recoverable as prompt - cached - creation.
                 completion_tokens = usage.get("output_tokens", 0) or 0
                 cached_tokens = usage.get("cache_read_input_tokens", 0) or 0
                 cache_creation_tokens = usage.get("cache_creation_input_tokens", 0) or 0
+                prompt_tokens = (usage.get("input_tokens", 0) or 0) + cached_tokens + cache_creation_tokens
 
                 # Claude Code emits one assistant event per content block, all
                 # sharing the same message id and the same usage object.  Count
@@ -1075,12 +1231,31 @@ def convert_jsonl_to_trajectory(log_path, output_path):
             def _sum(key):
                 return sum(int((ev.get("usage") or {}).get(key, 0) or 0) for ev in result_events)
 
-            final_metrics["total_prompt_tokens"] = _sum("input_tokens")
+            # Full prompt size, matching the per-step prompt_tokens above:
+            # uncached input + cache reads + cache creation.
+            final_metrics["total_prompt_tokens"] = (
+                _sum("input_tokens") + _sum("cache_read_input_tokens")
+                + _sum("cache_creation_input_tokens"))
             final_metrics["total_completion_tokens"] = _sum("output_tokens")
             final_metrics["total_cached_tokens"] = _sum("cache_read_input_tokens")
             final_metrics["total_cache_creation_tokens"] = _sum("cache_creation_input_tokens")
-            final_metrics["total_cost_usd"] = round(
-                sum(float(ev.get("total_cost_usd", 0.0) or 0.0) for ev in result_events), 6)
+            # `total_cost_usd` is CUMULATIVE per session: when the harness
+            # sends a follow-up prompt, the CLI resumes the same session_id and
+            # its second result event restates the WHOLE session's spend, while
+            # the `usage`, `num_turns` and `duration_ms` on that same event
+            # cover only the new segment.  Summing the cost therefore bills the
+            # earlier segments twice -- measured at 1.97x-1.98x on every
+            # two-event run in agent_output/.  Verified by fitting a price
+            # vector to the first event and predicting the second: it matches
+            # price x cumulative usage exactly, and price x segment usage by a
+            # factor of 25-50.  So: largest figure per session, summed across
+            # genuinely distinct sessions.
+            cost_by_session = {}
+            for ev in result_events:
+                sid = ev.get("session_id") or ""
+                cost_by_session[sid] = max(cost_by_session.get(sid, 0.0),
+                                           float(ev.get("total_cost_usd", 0.0) or 0.0))
+            final_metrics["total_cost_usd"] = round(sum(cost_by_session.values()), 6)
             final_metrics["num_turns"] = sum(int(ev.get("num_turns", 0) or 0) for ev in result_events)
             final_metrics["duration_ms"] = sum(int(ev.get("duration_ms", 0) or 0) for ev in result_events)
             final_metrics["cost_source"] = "cli_result_event"
@@ -1347,6 +1522,14 @@ def save_attempt_scores(run_dir, attempt, pytest_data, rubric_data, max_attempts
 
     pytest_score = pytest_data.get("reward", 0.0)
     stages = pytest_data.get("stages", {})
+    # map_stages() returns {stage_key: status_string}, not {stage_key: {...}}.
+    # See scripts/stage_names.py:154 and the sibling checks at lines 2037 and
+    # 1356, which both read this dict as strings.  Treating it as nested dicts
+    # raised AttributeError on every run that reached this line.
+    binary_stages = {
+        s: stages.get(s) == "passed"
+        for s in ["stage1", "stage2", "stage3", "stage4"]
+    }
     pytest_data_enriched = dict(pytest_data)
     pytest_data_enriched["stages_detail"] = {
         s: {"status": stages.get(s)}
@@ -1390,6 +1573,7 @@ def save_attempt_scores(run_dir, attempt, pytest_data, rubric_data, max_attempts
         "rubric_score": round(rubric_score, 6),
         "judge_available": judge_available,
         "scoring": "pytest_only" if no_judge else "pytest_and_rubric_mean",
+        "binary_stages": binary_stages,
     }
     json.dump(avg_data, open(attempt_dir / "avg_score.json", "w"), indent=2)
 
@@ -1405,13 +1589,19 @@ def save_attempt_scores(run_dir, attempt, pytest_data, rubric_data, max_attempts
             s: {"status": stages.get(s)}
             for s in STAGE_KEYS
         },
+        "binary_stages": binary_stages,
     }
     json.dump(reward_data, open(attempt_dir / "reward.json", "w"), indent=2)
 
+    binary_str = " ".join(
+        f"S{i + 1}={'pass' if binary_stages[f'stage{i + 1}'] else 'fail'}"
+        for i in range(4)
+    )
     print(f"  Scores saved to {attempt_dir}")
     print(f"    pytest_score = {pytest_score:+.4f}")
     print(f"    rubric_score = {rubric_score:+.4f}")
     print(f"    avg_score    = {avg_score:+.4f}")
+    print(f"    binary_stages: {binary_str}")
 
     return avg_score
 
@@ -1540,6 +1730,37 @@ def start_claude_subscription_bridge(args):
     return bridge
 
 
+def start_glm_bridge(args):
+    """Stand up the vendored zbridge for --model-provider glm, or return None
+    when the run should talk to z.ai's own Anthropic shim directly.
+
+    None is returned for --glm-direct (the old path, kept for comparing the
+    two) and when no z.ai credential is configured -- the caller reports that,
+    rather than this function killing the process.
+    """
+    if args.model_provider != "glm" or getattr(args, "glm_direct", False):
+        return None
+    key, source = resolve_zai_key()
+    if not key:
+        sys.exit("ERROR: not signed in to Z.ai.\n"
+                 "       Set ZB_ZAI_API_KEY (environment or .env), or run:\n"
+                 "         python3 run_harbor.py login --glm")
+    scripts_dir = Path(__file__).parent / "scripts"
+    sys.path.insert(0, str(scripts_dir))
+    try:
+        from glm_bridge import GlmBridge
+    except Exception as e:
+        raise RuntimeError(
+            f"Could not import the vendored zbridge launcher (scripts/glm_bridge.py): {e}. "
+            "Install host deps with: bash scripts/install_bridge_deps.sh") from e
+
+    bridge = GlmBridge(key, port=getattr(args, "glm_bridge_port", None))
+    print(f"  [glm] Z.ai credential from {source}; starting zbridge on the host...")
+    bridge.start()
+    print(f"  [glm] zbridge ready: {bridge.base_url} -> {ZBRIDGE_UPSTREAM}")
+    return bridge
+
+
 def start_codex_judge_bridge(llm_env):
     """Auto-start the local codex_oauth judge bridge when the codex judge needs
     it and nothing is answering yet -- the judge counterpart to
@@ -1596,15 +1817,28 @@ def start_codex_judge_bridge(llm_env):
     return None
 
 
-def main():
-    # Load .env before the parser is built so env values become argparse defaults.
-    load_dotenv()
-
+def build_arg_parser():
+    """Construct the CLI parser. Extracted verbatim from main(); no behavior change."""
     ap = argparse.ArgumentParser(description="Run a Harbor-formatted CyberGym task (weighted scoring)")
-    ap.add_argument("task_dir", nargs="?", help="Path to Harbor task directory (e.g. tasks/harfbuzz__arvo_62774)")
+    ap.add_argument("task_dir", nargs="?",
+                    help="Path to Harbor task directory (e.g. tasks/harfbuzz__arvo_62774), "
+                         "or the literal `login` to store a credential instead of running a task")
+    ap.add_argument("--glm", action="store_true",
+                    help="With `login`: store a Z.ai Coding Plan key in ~/.zai_api_key "
+                         "for --model-provider glm.")
     ap.add_argument("--max-attempts", type=int, default=1)
+    ap.add_argument("--pass-at-k", type=int, default=0, metavar="K",
+                    help="Draw K independent samples of the task and report the unbiased "
+                         "pass@1..pass@K estimator (Chen et al. 2021) in summary.json and "
+                         "verifier/pass@N.json. Implies independent sampling: runs all K "
+                         "attempts with no early stop on success and no cross-attempt "
+                         "feedback (overrides --max-attempts). E.g. --pass-at-k 8 for pass@8.")
     ap.add_argument("--no-feedback", action="store_true",
                     help="Run each attempt independently with no cross-attempt feedback")
+    ap.add_argument("--emit-bundle", nargs="?", const="delivery", default=None, metavar="OUT",
+                    help="After the run, reshape the output into a yuji-style delivery bundle "
+                         "(trajectories/<model>/runN/ + pass_summary.json + data/) under OUT "
+                         "(default: delivery/). Non-destructive: the agent_output/ run dir is kept.")
     ap.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT)
     ap.add_argument("--shared-network", action="store_true",
                     help="Keep the agent container on the default Docker bridge instead of an "
@@ -1623,13 +1857,21 @@ def main():
                     default=env_default("MODEL_PROVIDER", DEFAULT_MODEL_PROVIDER),
                     help=f"Model provider (env MODEL_PROVIDER, default: {DEFAULT_MODEL_PROVIDER}). "
                          "'glm' runs Claude Code against Z.ai's Anthropic endpoint on a GLM "
-                         "Coding Plan, with the credential from scripts/zai-bridge/glm login.")
+                         "Coding Plan, with the credential from `run_harbor.py login --glm`.")
     ap.add_argument("--glm-model-id",
                     default=env_default("GLM_MODEL_ID", DEFAULT_GLM_MODEL),
-                    help="Pin a GLM model id for --model-provider glm (env GLM_MODEL_ID). "
-                         "Default: none; Z.ai maps Claude ids to GLM server-side and the "
-                         "trajectory records the id it answered as. GLM_SMALL_MODEL_ID pins "
-                         "the haiku-tier model.")
+                    help=f"GLM model id for --model-provider glm (env GLM_MODEL_ID, default "
+                         f"{DEFAULT_GLM_MODEL}; GLM_SMALL_MODEL_ID sets the haiku-tier model, "
+                         f"default {DEFAULT_GLM_SMALL_MODEL}). Z.ai's own mapping of Claude ids "
+                         "lands on glm-5.3-flash, so leave this pinned.")
+    ap.add_argument("--glm-direct", action="store_true",
+                    default=bool(env_default("GLM_DIRECT", "").strip()),
+                    help="With --model-provider glm, skip the vendored zbridge and talk to "
+                         f"z.ai's own Anthropic shim ({ZAI_ANTHROPIC_BASE_URL}) directly "
+                         "(env: GLM_DIRECT).  That endpoint reports zero per-step input "
+                         "tokens, so the default routes through zbridge instead.")
+    ap.add_argument("--glm-bridge-port", type=int, default=None,
+                    help="Host port for the zbridge child (default 8820, +1 on collision).")
     ap.add_argument("--anthropic-model-id",
                     default=env_default("ANTHROPIC_MODEL_ID", DEFAULT_AGENT_MODEL),
                     help=f"Agent model (env ANTHROPIC_MODEL_ID, default: {DEFAULT_AGENT_MODEL}).")
@@ -1672,13 +1914,66 @@ def main():
                     help="Team type for finance tracking (default: Projects)")
     ap.add_argument("--finance-subscription-id", default=os.environ.get("FINANCE_SUBSCRIPTION_ID", ""),
                     help="Subscription ID for finance billing attribution.")
+    return ap
+
+
+def select_reported_attempt(all_attempts, final_status):
+    """Pick the attempt to report and reconcile the run's final status.
+    Pure; extracted verbatim from main() with no behavior change."""
+    # Reported attempt: the successful one if any, else the highest-scoring
+    # scored attempt (never the merely-last one), else the last record.
+    # Only GRADED attempts carry a score; skipped ones (no artefacts) are
+    # 0.0 by definition and never out-rank a graded attempt.
+    graded = [a for a in all_attempts
+              if a.get("avg_score") is not None and not str(a.get("status", "")).startswith("skipped")]
+    skipped = [a for a in all_attempts if str(a.get("status", "")).startswith("skipped")]
+    scored = graded or skipped
+    best = next((a for a in reversed(all_attempts) if a.get("success")), None)
+    if best is None and graded:
+        best = max(graded, key=lambda a: a["avg_score"])
+    if best is None and skipped:
+        best = skipped[-1]
+    if best is None:
+        best = all_attempts[-1] if all_attempts else {}
+
+    if final_status != "success" and all_attempts:
+        statuses = {a.get("status") for a in all_attempts}
+        if "isolation_error" in statuses:
+            final_status = "isolation_error"
+        elif statuses and statuses <= {"verifier_error", "harness_error"}:
+            final_status = "verifier_error" if "verifier_error" in statuses else "harness_error"
+    return best, scored, final_status
+
+
+def main():
+    # Load .env before the parser is built so env values become argparse defaults.
+    load_dotenv()
+
+    ap = build_arg_parser()
 
     args = ap.parse_args()
     if args.self_test:
         _self_test()
         return
+    # `run_harbor.py login --glm` stores a credential and exits; it runs no task,
+    # so it is handled here beside --self-test rather than in the run path.
+    if args.task_dir == "login":
+        if not args.glm:
+            ap.error("`login` needs a credential to store: run `login --glm`")
+        sys.exit(glm_login())
     if not args.task_dir:
         ap.error("task_dir is required")
+
+    # pass@k: draw K independent samples. Force independent sampling so the
+    # unbiased estimator is valid -- no early stop, no cross-attempt feedback.
+    pass_k_mode = args.pass_at_k and args.pass_at_k > 0
+    if pass_k_mode:
+        if args.pass_at_k < 1:
+            ap.error("--pass-at-k must be >= 1")
+        args.max_attempts = args.pass_at_k
+        args.no_feedback = True
+        print(f"pass@k mode: {args.pass_at_k} independent samples "
+              f"(no early stop, no feedback)")
 
     task_dir = Path(args.task_dir).resolve()
     if not (task_dir / "task.toml").exists():
@@ -1693,6 +1988,7 @@ def main():
         sys.exit("ERROR: --claude-subscription and --model-provider glm are mutually exclusive")
 
     claude_bridge = None
+    glm_bridge = None
     codex_bridge_proc = None
     if args.claude_subscription:
         claude_bridge = start_claude_subscription_bridge(args)
@@ -1701,7 +1997,8 @@ def main():
             if sub_id:
                 args.finance_subscription_id = sub_id
 
-    llm_env, llm_model = get_llm_env(args)
+    glm_bridge = start_glm_bridge(args)
+    llm_env, llm_model = get_llm_env(args, glm_bridge)
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     iter_suffix = f"_x{args.max_attempts}" if args.max_attempts > 1 else ""
@@ -1846,6 +2143,8 @@ def main():
     def _stop_bridge():
         if claude_bridge is not None:
             claude_bridge.stop()
+        if glm_bridge is not None:
+            glm_bridge.stop()
         if codex_bridge_proc is not None:
             try:
                 codex_bridge_proc.terminate()
@@ -1883,7 +2182,9 @@ def main():
                     # API host pinned to the relay; TLS still validates against
                     # the real hostname because SNI/Host are unchanged.
                     exec_run(cid, f"RIP=$(getent ahostsv4 {RELAY_ALIAS} | awk '{{print $1}}' | head -1); "
-                                  f"sed -i '/ {target_host}$/d' /etc/hosts; "
+                                  # in-place rewrite: /etc/hosts is a bind mount, sed -i cannot rename over it
+                                  f"grep -v ' {target_host}$' /etc/hosts > /tmp/hosts.new || true; "
+                                  f"cat /tmp/hosts.new > /etc/hosts; "
                                   f"echo \"$RIP {target_host}\" >> /etc/hosts", verbose=False)
                 print(f"  Isolated network {iso_net}: agent -> {RELAY_ALIAS}:{target_port} -> "
                       f"{target_host}:{target_port}; no other route")
@@ -1897,6 +2198,15 @@ def main():
                     from urllib.parse import urlparse as _up
                     _u = _up(attempt_env.get("ANTHROPIC_BASE_URL", ""))
                     allow_host, allow_port = _u.hostname, _u.port or 443
+                elif attempt_env.get("CLAUDE_CODE_USE_BEDROCK"):
+                    # Bedrock's lockdown allows the regional runtime host, NOT
+                    # api.anthropic.com, so the endpoint-reachable probe must
+                    # target a host the lockdown actually permits (matches the
+                    # allowlist in lockdown_agent_network); otherwise every
+                    # Bedrock run fails isolation verification.
+                    _region = (attempt_env.get("AWS_REGION")
+                               or os.environ.get("AWS_REGION") or "us-west-2")
+                    allow_host, allow_port = f"bedrock-runtime.{_region}.amazonaws.com", 443
                 else:
                     allow_host, allow_port = "api.anthropic.com", 443
             if not args.no_lockdown and not ISOLATION["lockdown_applied"]:
@@ -2089,7 +2399,9 @@ def main():
             if agent_success:
                 print(f"\n*** SUCCESS on attempt {attempt}! (avg_score={avg_score:+.4f}) ***")
                 final_status = "success"
-                break
+                if not pass_k_mode:
+                    break
+                # pass@k: keep sampling the remaining attempts so c/n is complete.
             else:
                 feedback = format_feedback(stages, attempt, str(poc_file), str(patch_file), required)
                 print(feedback)
@@ -2151,28 +2463,7 @@ def main():
 
     reward_dir = run_dir / "verifier"
     reward_dir.mkdir(exist_ok=True)
-    # Reported attempt: the successful one if any, else the highest-scoring
-    # scored attempt (never the merely-last one), else the last record.
-    # Only GRADED attempts carry a score; skipped ones (no artefacts) are
-    # 0.0 by definition and never out-rank a graded attempt.
-    graded = [a for a in all_attempts
-              if a.get("avg_score") is not None and not str(a.get("status", "")).startswith("skipped")]
-    skipped = [a for a in all_attempts if str(a.get("status", "")).startswith("skipped")]
-    scored = graded or skipped
-    best = next((a for a in reversed(all_attempts) if a.get("success")), None)
-    if best is None and graded:
-        best = max(graded, key=lambda a: a["avg_score"])
-    if best is None and skipped:
-        best = skipped[-1]
-    if best is None:
-        best = all_attempts[-1] if all_attempts else {}
-
-    if final_status != "success" and all_attempts:
-        statuses = {a.get("status") for a in all_attempts}
-        if "isolation_error" in statuses:
-            final_status = "isolation_error"
-        elif statuses and statuses <= {"verifier_error", "harness_error"}:
-            final_status = "verifier_error" if "verifier_error" in statuses else "harness_error"
+    best, scored, final_status = select_reported_attempt(all_attempts, final_status)
 
     final_pytest = best.get("pytest_score")
     final_rubric = best.get("rubric_score")
@@ -2202,6 +2493,36 @@ def main():
             pass
 
 
+    # pass@k: unbiased estimate over the independent samples. n = samples that
+    # actually ran (isolation/verifier/harness errors are not model samples);
+    # c = samples that solved the task (all required stages passed).
+    pass_at_k_result = None
+    if pass_k_mode:
+        _err = {"isolation_error", "verifier_error", "harness_error"}
+        samples = [a for a in all_attempts if a.get("status") not in _err]
+        n_s = len(samples)
+        c_s = sum(1 for a in samples if a.get("agent_success"))
+        ks = list(range(1, n_s + 1))
+        pass_at_k_result = {
+            "k_requested": args.pass_at_k,
+            "n": n_s,
+            "c": c_s,
+            "pass_criterion": "agent_success (all required stages passed)",
+            "pass@k": {str(k): round(pass_at_k(n_s, c_s, k), 6) for k in ks},
+            "per_sample": [
+                {"attempt": a.get("attempt"),
+                 "agent_success": bool(a.get("agent_success")),
+                 "reward": a.get("avg_score"),
+                 "status": a.get("status")}
+                for a in samples
+            ],
+        }
+        json.dump(pass_at_k_result, open(reward_dir / f"pass@{n_s}.json", "w"), indent=2)
+        if ks:
+            print("\n  pass@k over %d samples (c=%d solved): " % (n_s, c_s)
+                  + ", ".join("pass@%d=%.4f" % (k, pass_at_k_result["pass@k"][str(k)])
+                              for k in ks))
+
     summary = {
         "task": task_name,
         "agent": "claude-code",
@@ -2209,6 +2530,7 @@ def main():
         "mode": mode,
         "required_stages": sorted(required),
         "max_attempts": args.max_attempts,
+        "pass_at_k": pass_at_k_result,
         "timeout": args.timeout,
         "status": final_status,
         "reward": round(final_avg, 6),
@@ -2232,12 +2554,23 @@ def main():
         "rubric_detail": best_rubric_detail,
         "duration_seconds": duration,
         "duration_minutes": round(duration / 60, 2),
-        "output_dir": str(run_dir.absolute()),
+        "output_dir": _short_path(run_dir),
         "model": llm_model,
         "model_provider": args.model_provider,
-        "harbor_task": str(task_dir),
+        "harbor_task": _short_path(task_dir),
     }
     json.dump(summary, open(run_dir / "summary.json", "w"), indent=2)
+
+    # Optional: reshape into a yuji-style delivery bundle. Guarded so a reshape
+    # failure never fails an otherwise-good run.
+    if getattr(args, "emit_bundle", None):
+        try:
+            sys.path.insert(0, str(Path(__file__).parent / "scripts"))
+            from reshape_bundle import reshape as _reshape
+            _bundle = _reshape(run_dir, Path(args.emit_bundle), task_dir)
+            print(f"  Delivery bundle (yuji-style): {_short_path(_bundle)}")
+        except Exception as e:  # noqa: BLE001
+            print(f"  [bundle] reshape skipped: {e}")
 
     # --- Finance API: post usage (opt-in, fully isolated) ---
     # A run that never reached the agent (install / isolation / build failure)

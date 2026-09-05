@@ -1,4 +1,7 @@
 #!/bin/bash
+# Fail fast: a failed install must abort so a broken image is never shipped
+# (pipefail catches a failing `curl ... | sh`).
+set -eo pipefail
 
 # adapted from https://github.com/laude-institute/terminal-bench/blob/main/terminal_bench/agents/installed_agents/openhands/openhands-setup.sh.j2
 

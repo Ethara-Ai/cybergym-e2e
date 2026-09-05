@@ -8,6 +8,15 @@ import tomli
 from run_agent import run_final_validation
 
 if __name__ == "__main__":
+    import os
+    # DEPRECATED entry point (see the module header). Refuse by default so nobody
+    # gets an unsealed, binary-scored validation run by accident.
+    if os.environ.get("ALLOW_DEPRECATED_RUNNER") != "1":
+        sys.exit(
+            "dataset_validate.py is DEPRECATED: binary scoring, no reward/ctrf/rubric "
+            "files, and NO network lockdown -- unfit for any run you intend to report.\n"
+            "Use run_harbor.py instead.  To run anyway: set ALLOW_DEPRECATED_RUNNER=1"
+        )
     task_path = sys.argv[1]
 
     # Final validation with fresh containers per stage

@@ -23,17 +23,31 @@ set -euo pipefail
 if [[ "${1:-}" == "--stop" ]]; then
     echo "Stopping all validation processes..."
 
-    # Kill batch_validate.sh processes
-    pkill -9 -f "batch_validate.sh" 2>/dev/null || true
+    # Kill batch_validate.sh driver processes, but NOT this --stop shell (the
+    # old `pkill -9 -f batch_validate.sh` matched and killed itself).
+    pgrep -f "batch_validate.sh" | grep -vx "$$" | xargs -r kill -9 2>/dev/null || true
 
-    # Kill dataset_validate.py processes
-    pkill -9 -f "dataset_validate.py" 2>/dev/null || true
-
-    # Kill Docker containers. Disable for now to avoid killing unrelated containers.
-    # docker ps -q 2>/dev/null | head -20 | xargs -r docker kill 2>/dev/null || true
+    # `pkill -f dataset_validate.py` matches every such process on the host, not
+    # just this batch's, so it is opt-in to avoid killing unrelated work.
+    if [[ "${BATCH_REAP_CONTAINERS:-0}" == "1" ]]; then
+        echo "  BATCH_REAP_CONTAINERS=1: killing ALL dataset_validate.py procs host-wide (may hit unrelated work)"
+        pkill -9 -f "dataset_validate.py" 2>/dev/null || true
+    else
+        echo "  Note: validation drivers stopped. Set BATCH_REAP_CONTAINERS=1 to also kill dataset_validate.py procs host-wide."
+    fi
 
     echo "Done."
     exit 0
+fi
+
+# DEPRECATED entry point (see the header). It drives dataset_validate.py, which
+# scores on a binary scale, writes no reward files, and applies NO network
+# lockdown. Refuse to run by default; --stop above still works.
+if [[ "${ALLOW_DEPRECATED_RUNNER:-0}" != "1" ]]; then
+    echo "batch_validate.sh is DEPRECATED: it drives dataset_validate.py (binary scoring, no reward files, NO network lockdown)." >&2
+    echo "Use run_harbor.py for anything you intend to report." >&2
+    echo "To run anyway (never for reporting): ALLOW_DEPRECATED_RUNNER=1 bash scripts/batch_validate.sh ..." >&2
+    exit 2
 fi
 
 # Configuration
@@ -57,14 +71,14 @@ cleanup() {
     echo ""
     echo "[$(date +%H:%M:%S)] Received shutdown signal, cleaning up..."
 
-    # Kill all child processes
+    # Kill this batch's own child processes only (scoped to our subtree; safe).
     pkill -P $$ 2>/dev/null || true
 
-    # Kill dataset_validate processes
-    pkill -f "dataset_validate.py" 2>/dev/null || true
-
-    # Kill Docker containers. Disable for now to avoid killing unrelated containers.
-    # docker ps -q 2>/dev/null | head -20 | xargs -r docker kill 2>/dev/null || true
+    # `pkill -f dataset_validate.py` is host-wide and can hit another session's
+    # process, so it is opt-in.
+    if [[ "${BATCH_REAP_CONTAINERS:-0}" == "1" ]]; then
+        pkill -f "dataset_validate.py" 2>/dev/null || true
+    fi
 
     echo "[$(date +%H:%M:%S)] Cleanup complete"
     exit 130

@@ -271,6 +271,11 @@ class CredentialProvider:
             data["last_refresh"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             tmp = p.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(data, indent=2))
+            # auth.json holds the refresh token: keep it private (0600). The temp
+            # inherits the umask (often 0644) and os.replace preserves the temp's
+            # mode, so set it explicitly before the rename or the token file is
+            # downgraded to world-readable on the first refresh.
+            os.chmod(tmp, 0o600)
             os.replace(tmp, p)
         except Exception as e:  # noqa: BLE001 — persistence is best-effort
             _LOG.debug("token write-back skipped: %s", e)

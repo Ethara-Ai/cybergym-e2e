@@ -1324,6 +1324,17 @@ def start_claude_subscription_bridge(args):
 # =============================================================================
 
 def main():
+    # DEPRECATED entry point (see the module header). Refuse to run by default so
+    # nobody produces an unsealed, binary-scored run by accident. Guard lives in
+    # main(), not at module import, so `from run_agent import run_final_validation`
+    # (used by dataset_validate.py) still resolves.
+    if os.environ.get("ALLOW_DEPRECATED_RUNNER") != "1":
+        sys.exit(
+            "run_agent.py is DEPRECATED: binary scoring, no reward/ctrf/rubric files, "
+            "and NO network lockdown -- unfit for any run you intend to report.\n"
+            "Use:  python3 run_harbor.py tasks/<task> [--claude-subscription] ...\n"
+            "To run it anyway (never for reporting): set ALLOW_DEPRECATED_RUNNER=1"
+        )
     parser = argparse.ArgumentParser(
         description="Unified agent runner for cybergym-e2e",
         formatter_class=argparse.RawDescriptionHelpFormatter,

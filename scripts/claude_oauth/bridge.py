@@ -1414,7 +1414,10 @@ def build_app(provider: ProviderLike | None = None) -> FastAPI:
                     try:
                         _dump_dir = os.environ.get("WCB_CC_BODY_DUMP_DIR", "/tmp")
                         _dump_path = f"{_dump_dir}/wcb_bridge_last_body_{int(time.time())}.json"
-                        with open(_dump_path, "wb") as _f:
+                        # The body carries the prompt and the stub secret header;
+                        # create the dump 0600 so it is not world-readable in /tmp.
+                        _fd = os.open(_dump_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(_fd, "wb") as _f:
                             _f.write(raw_body)
                         _LOG.warning("REQ_BODY_DUMP wrote %d bytes to %s", len(raw_body), _dump_path)
                     except Exception as _e2:  # noqa: BLE001

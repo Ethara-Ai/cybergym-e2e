@@ -40,20 +40,39 @@ set -euo pipefail
 if [[ "${1:-}" == "--stop" ]]; then
     echo "Stopping all batch processes..."
 
-    # Kill batch_run.sh processes
+    # Kill batch_run.sh driver processes (the documented intent of --stop).
     # Do not kill this very shell (it matches the pattern too).
     pgrep -f "batch_run.sh" | grep -vx "$$" | xargs -r kill -9 2>/dev/null || true
 
-    # Kill run_agent.py processes
-    pkill -9 -f "run_agent.py" 2>/dev/null || true
-
-    # Kill Docker containers. Disable for now to avoid killing unrelated containers.
-    # run_agent.py names containers <agent>-<uuid>, e.g. claude-code-...
-    docker ps -q --filter "name=^claude-code-" 2>/dev/null | xargs -r docker kill 2>/dev/null || true
-    # docker ps -q 2>/dev/null | head -20 | xargs -r docker kill 2>/dev/null || true
+    # The kills below reach ACROSS process/container ownership: `pkill -f
+    # run_agent.py` hits every run_agent.py on the host, and the claude-code-*
+    # filter matches any such container (e.g. an interactive Claude Code
+    # session), not just this batch's. They are opt-in to avoid killing
+    # unrelated work. Set BATCH_REAP_CONTAINERS=1 only when you know nothing
+    # else on this host uses run_agent.py or claude-code-* containers.
+    if [[ "${BATCH_REAP_CONTAINERS:-0}" == "1" ]]; then
+        echo "  BATCH_REAP_CONTAINERS=1: killing ALL run_agent.py procs and claude-code-* containers (may hit unrelated work)"
+        pkill -9 -f "run_agent.py" 2>/dev/null || true
+        docker ps -q --filter "name=^claude-code-" 2>/dev/null | xargs -r docker kill 2>/dev/null || true
+    else
+        echo "  Note: batch drivers stopped. Agent containers they started may still be running."
+        echo "        Reap host-wide with: BATCH_REAP_CONTAINERS=1 bash scripts/batch_run.sh --stop"
+        echo "        or inspect first:    docker ps --filter name=^claude-code-"
+    fi
 
     echo "Done."
     exit 0
+fi
+
+# DEPRECATED entry point (see the header). It drives run_agent.py, which scores
+# on a binary scale, writes no reward/ctrf/rubric files, and applies NO network
+# lockdown. Refuse to run by default; --stop above still works. The escape-hatch
+# env var is inherited by the run_agent.py children, so setting it once is enough.
+if [[ "${ALLOW_DEPRECATED_RUNNER:-0}" != "1" ]]; then
+    echo "batch_run.sh is DEPRECATED: it drives run_agent.py (binary scoring, no reward files, NO network lockdown)." >&2
+    echo "Use run_harbor.py for anything you intend to report." >&2
+    echo "To run anyway (never for reporting): ALLOW_DEPRECATED_RUNNER=1 bash scripts/batch_run.sh ..." >&2
+    exit 2
 fi
 
 # Configuration
@@ -95,19 +114,22 @@ cleanup() {
     echo ""
     echo "[$(date +%H:%M:%S)] Received shutdown signal, cleaning up..."
 
-    # Kill all child processes
+    # Kill this batch's own child processes only (scoped to our subtree; safe).
     pkill -P $$ 2>/dev/null || true
 
-    # Kill run_agent processes started by us
+    # Kill run_agent processes started by us (scoped by AWS profile when set).
     if [ -n "$AWS_PROFILE" ]; then
         pkill -f "run_agent.py.*--aws-profile $AWS_PROFILE" 2>/dev/null || true
     else
         echo "AWS_PROFILE is empty: not killing run_agent.py processes (pattern would match everyone's)"
     fi
 
-    # Kill Docker containers FIXME: This may kill unrelated containers
-    # run_agent.py names containers <agent>-<uuid>, e.g. claude-code-...
-    docker ps -q --filter "name=^claude-code-" 2>/dev/null | xargs -r docker kill 2>/dev/null || true
+    # A broad claude-code-* container kill can hit unrelated containers, so it is
+    # opt-in (see the --stop note). Default cleanup leaves them for the age-gated
+    # sweep or an explicit `docker ps --filter name=^claude-code-` kill.
+    if [[ "${BATCH_REAP_CONTAINERS:-0}" == "1" ]]; then
+        docker ps -q --filter "name=^claude-code-" 2>/dev/null | xargs -r docker kill 2>/dev/null || true
+    fi
 
     echo "[$(date +%H:%M:%S)] Cleanup complete"
     exit 130

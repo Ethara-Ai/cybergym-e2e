@@ -47,7 +47,7 @@ order:
 1. `[bridge] ready` and `[finance] subscription account: <you>` — the bridge is
    up on **your** current `claude` login (the freshest credentials win). A GLM
    run prints `[glm] Z.ai credential from ~/.zai_api_key; endpoint https://api.z.ai/api/anthropic`
-   instead, and `Model: glm (server-mapped by Z.ai)`.
+   instead, and `Model: glm-5.3`.
 2. `Mode: e2e|patch-only` and `Required stages (from test_weights.json): [...]`
    — a patch-only task lists only the stages it grades.
 3. `Container:`, `Installing Claude Code`, then
@@ -77,8 +77,11 @@ steady state.
 
 Install Python dependencies:
 ```bash
-pip install tomli tomli_w anthropic openai boto3 httpx huggingface_hub docker
+pip install -r requirements.txt
 ```
+(Host-side only; container deps are installed into the task image by
+`scripts/install_*.sh`. The LLM-provider packages are guarded imports — drop the
+ones you don't use.)
 
 Download the benchmark data from HuggingFace:
 ```bash
@@ -101,7 +104,7 @@ Sign in for the two agents (one time each, on the host):
 claude /login                                # Opus 5: Claude Max/Pro subscription (see --claude-subscription)
 bash scripts/install_bridge_deps.sh          # fastapi/uvicorn/httpx for the OAuth bridge
 scripts/zai-bridge/install.sh                # GLM: puts `glm` and `glm-login` on PATH
-glm login                                    # browser sign-in to Z.ai (or `glm login --paste-key`)
+glm login --paste-key                        # paste a Z.ai dashboard key (the browser flow is currently rejected by Z.ai)
 ```
 
 ## Running Tasks
@@ -130,6 +133,13 @@ python run_harbor.py tasks/irssi__arvo_31491 --timeout 3600
 
 # Multi-attempt with feedback
 python run_harbor.py tasks/harfbuzz__arvo_62774 --max-attempts 3
+
+# pass@k: K INDEPENDENT samples (no early stop, no cross-attempt feedback);
+# reports the unbiased pass@1..pass@K estimator (Chen et al. 2021)
+python run_harbor.py tasks/harfbuzz__arvo_62774 --pass-at-k 8
+
+# ... and emit the per-model delivery bundle when the run finishes
+python run_harbor.py tasks/harfbuzz__arvo_62774 --pass-at-k 8 --emit-bundle delivery
 ```
 
 ```bash
@@ -152,8 +162,8 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 # GLM on a Z.ai Coding Plan (sign in once with scripts/zai-bridge/glm login)
 python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm
 
-# ... pinned to one GLM id instead of Z.ai's server-side mapping
-python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm --glm-model-id glm-5.3
+# ... a different GLM id (default glm-5.3)
+python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm --glm-model-id glm-5.3-flash
 ```
 
 ### Two agents per task: Opus 5 and GLM
@@ -178,9 +188,9 @@ by side under the task, grouped by model:
 
 ```
 agent_output/<task>/claude-opus-5/<timestamp>_e2e/
-agent_output/<task>/glm/<timestamp>_e2e/            # or glm-5.3/ when pinned
+agent_output/<task>/glm-5.3/<timestamp>_e2e/
 evidence/<task>/claude-opus-5/<timestamp>_e2e/
-evidence/<task>/glm/<timestamp>_e2e/
+evidence/<task>/glm-5.3/<timestamp>_e2e/
 ```
 
 `summary.json` in each carries `model` and `model_provider`, so a comparison
@@ -210,7 +220,7 @@ resolve the task from either layout.
 | `--model-provider` | `anthropic` | LLM provider: `anthropic`, `bedrock` or `glm` (Z.ai GLM Coding Plan, see below) |
 | `--anthropic-model-id` | `claude-opus-5` | Anthropic model ID for the agent |
 | `--bedrock-model-id` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID |
-| `--glm-model-id` | none | Pin a GLM model id for `--model-provider glm`; by default Z.ai maps Claude ids to GLM server-side |
+| `--glm-model-id` | `glm-5.3` | GLM model for `--model-provider glm`. Keep it pinned: Z.ai's own mapping of Claude ids lands on `glm-5.3-flash` |
 | `--aws-region` | `us-west-2` | AWS region for Bedrock |
 | `--output-dir` | `agent_output/<task>/<model>/<timestamp>_e2e` | Custom output directory |
 | `--evidence-dir` | `evidence/<task>/<model>/<timestamp>_e2e` | Where agent evidence (`crash.log`) is collected, outside `agent_output/` |
@@ -240,8 +250,8 @@ resolve the task from either layout.
 | `BEDROCK_MODEL_ID` | Bedrock model id |
 | `AWS_REGION` | AWS region; default `us-west-2` |
 | `ZAI_API_KEY` | Z.ai credential for `--model-provider glm` when there is no `~/.zai_api_key` (from `scripts/zai-bridge/glm login`) |
-| `GLM_MODEL_ID` | Pin the GLM agent model; default none (server-mapped) |
-| `GLM_SMALL_MODEL_ID` | Pin the haiku-tier GLM model; default none |
+| `GLM_MODEL_ID` | GLM agent model; default `glm-5.3` |
+| `GLM_SMALL_MODEL_ID` | GLM model for the CLI's haiku-tier background calls; default `glm-5.3-flash` |
 | `GLM_API_TIMEOUT_MS` | Claude Code per-request timeout under `glm`; default `3000000` |
 | `JUDGE_PROVIDER` | `codex` only (default). The rubric judge never uses an Anthropic model; the local codex bridge is checked at startup |
 | `JUDGE_MAX_RETRIES` | Transport retries per judge call (backoff + jitter, honours `Retry-After`); default `4` |
@@ -341,10 +351,17 @@ Claude Code talks to Z.ai's Anthropic-compatible endpoint
 **Sign in once (host):**
 
 ```bash
-scripts/zai-bridge/install.sh     # optional: puts `glm` and `glm-login` on PATH
-scripts/zai-bridge/glm login      # browser OAuth; mints a Coding Plan key named glm-bridge
-scripts/zai-bridge/glm login --paste-key   # or paste a key from z.ai/manage-apikey/apikey-list
+scripts/zai-bridge/install.sh              # optional: puts `glm` and `glm-login` on PATH
+scripts/zai-bridge/glm login --paste-key   # paste a key from https://z.ai/manage-apikey/apikey-list
+scripts/zai-bridge/glm login               # browser OAuth alternative (see note)
 ```
+
+Use `--paste-key`. As of 2026-09-04 the browser flow ends at Z.ai with
+`{"detail": "Redirect URI not registered for this client"}`: the authorize
+step accepts the loopback callback, but the approval step after login rejects
+it, and the redirect the ZCode client actually registers is not public. Nothing
+in the script can fix that; the dashboard key is the documented way to use the
+Coding Plan with Claude Code anyway.
 
 The credential lands in `~/.zai_api_key` (mode 600). `glm logout` removes it.
 `ZAI_API_KEY` in `.env` is the fallback for a host without a browser. See
@@ -356,8 +373,8 @@ the plan, while your normal `claude` command stays on the Anthropic subscription
 1. Reads the key from `~/.zai_api_key` (else `ZAI_API_KEY`) and fails at startup with the sign-in command if neither exists
 2. Passes the agent `ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic`, `ANTHROPIC_AUTH_TOKEN=<key>` (never `ANTHROPIC_API_KEY`, which makes Claude Code raise a trust prompt) and `API_TIMEOUT_MS=3000000`
 3. Locks the container network the same way as a plain Anthropic key: `api.z.ai` is resolved once, pinned in `/etc/hosts`, and only it is reachable on 443 through the one-port relay
-4. Stores the run under `agent_output/<task>/glm/<timestamp>_e2e/` (or the pinned id instead of `glm`), next to the Opus 5 runs in `agent_output/<task>/claude-opus-5/`; the evidence tree mirrors it
-5. Sends no model id by default; Z.ai maps Claude ids to GLM server-side (opus/sonnet to its current best GLM, haiku to a light model) and every step of `trajectory.json` records the GLM id Z.ai answered as. `summary.json` carries `model_provider: glm` and `model: glm (server-mapped by Z.ai)`, or the pinned id when `--glm-model-id` / `GLM_MODEL_ID` is set (`GLM_SMALL_MODEL_ID` pins the haiku tier)
+4. Stores the run under `agent_output/<task>/glm-5.3/<timestamp>_e2e/` (the model id), next to the Opus 5 runs in `agent_output/<task>/claude-opus-5/`; the evidence tree mirrors it
+5. Pins the model: `ANTHROPIC_MODEL` and the CLI's opus/sonnet aliases are set to `--glm-model-id` (default `glm-5.3`), the haiku alias to `GLM_SMALL_MODEL_ID` (default `glm-5.3-flash`). Measured on 2026-09-04, Z.ai's own mapping sends `claude-opus-5`, `claude-sonnet-5` and `claude-haiku-4-5` all to `glm-5.3-flash`, so an unpinned run would benchmark the small model. `GLM_MODEL_ID=` (blank) opts back into server mapping and records `model: glm (server-mapped by Z.ai)`
 
 **Caveats.** An upstream error with code `1113 Insufficient Balance` means the
 key's account has no active Coding Plan. Quota is a 5-hour rolling window; a
@@ -433,16 +450,26 @@ that takes the shortcut is penalised.
 - Input is the **complete** `agent.jsonl` transcript (see *What the judge
   reads* below). **The judge never sees the verifier results**, so the two
   scores stay independent.
-- `JUDGE_TRIALS` trials (default 11), each with the criteria order shuffled to
-  cancel position bias. The **median** score wins, and the median trial's
-  per-criterion verdicts are what land in `rubric_score.json`.
-- `rubric_score = earned / total_positive`, clamped to `[-1, 1]`.
-- `rubric_score` is the **lower median** of the trial scores, so it is always the
-  score of a real trial and its `earned` / criteria come from that same trial.
-- Alongside the score it records a conformal interval over the trial scores with
-  its **achieved** coverage (`conformal_coverage`, e.g. 83% at 11 trials — the 90%
-  nominal figure needs 19+ trials, below that the interval is `[min, max]`) and a
-  perturbation check (`stdev < 0.15`).
+- **Adaptive trials.** A cheap **probe** of `JUDGE_MIN_TRIALS` trials (default 3)
+  runs first; if they agree (score spread ≤ `JUDGE_AGREE_EPS`, default `0.0`) and
+  none looks confabulated, judging **stops there**. Otherwise it escalates up to
+  `JUDGE_TRIALS` (default 11, the ceiling). This is ~3–4× cheaper on the common
+  (stable) case and avoids hammering the judge subscription with a fixed 11-call
+  burst, while keeping full repetition on the noisy tail. Each trial's criteria
+  order is shuffled with a **per-(trajectory, trial) seed**, so a re-judge of the
+  same trajectory is reproducible.
+- The **median** score wins (lower median — always a real trial's score, so its
+  `earned` / criteria come from that same trial). `rubric_score = earned /
+  total_positive`, clamped to `[-1, 1]`.
+- **Grounding guard.** If the winning verdict's evidence cites a filename that
+  never appears in the trajectory (a confabulation signal), the trial no longer
+  early-stops and the result is flagged. Grounding never changes the score.
+- **Reliability, surfaced not enforced.** Alongside the score it records a
+  conformal interval (`conformal_coverage`), a perturbation check (`stdev < 0.15`),
+  and a consolidated `reliable` / `low_confidence` flag (`reliable = perturbation
+  passed AND conformal_width ≤ JUDGE_CONFORMAL_WIDE (0.25) AND grounded`). A
+  low-confidence judgment is flagged and warned about, but the median score still
+  stands — the headline number is never silently rewritten.
 
 Because criteria are shuffled per trial, `rubric_score.json` re-sorts them back to
 canonical rubric order before writing. Malformed judge output is recorded rather
@@ -679,22 +706,27 @@ criterion; two runs over the same trajectory with the same judge have produced
 
 ### Legacy Runner (deprecated)
 
-`scripts/run_agent.py` scores on a binary scale, writes none of the
-`reward` / `ctrf.json` / `rubric_score.json` files, applies no network lockdown
-and pins no platform. Its numbers are not comparable to `run_harbor.py` output.
-Kept only for reference:
+`scripts/run_agent.py` (and `scripts/dataset_validate.py`) score on a binary
+scale, write none of the `reward` / `ctrf.json` / `rubric_score.json` files,
+apply no network lockdown and pin no platform. Their numbers are not comparable
+to `run_harbor.py` output, so they **refuse to run by default** — set
+`ALLOW_DEPRECATED_RUNNER=1` to override (never for a run you intend to report):
 
 ```bash
 # Single task (requires boto3 and other SDK dependencies)
-python scripts/run_agent.py curl/arvo_66012 --mode e2e
-python scripts/run_agent.py curl/arvo_66012 --mode patch-only
+ALLOW_DEPRECATED_RUNNER=1 python scripts/run_agent.py curl/arvo_66012 --mode e2e
+ALLOW_DEPRECATED_RUNNER=1 python scripts/run_agent.py curl/arvo_66012 --mode patch-only
 ```
 
 ### Batch Run
 
+`scripts/batch_run.sh` / `batch_validate.sh` drive the deprecated runners above,
+so they are also gated behind `ALLOW_DEPRECATED_RUNNER=1`. Prefer running
+`run_harbor.py` per task (or your own loop over it) for anything reportable.
+
 ```bash
-# Run all tasks in a task file
-MODE=e2e MAX_PARALLEL=4 bash scripts/batch_run.sh scripts/tasks.txt
+# Run all tasks in a task file (deprecated path)
+ALLOW_DEPRECATED_RUNNER=1 MODE=e2e MAX_PARALLEL=4 bash scripts/batch_run.sh scripts/tasks.txt
 ```
 
 ## Output Structure
@@ -719,13 +751,17 @@ agent_output/<task>/<model>/<timestamp>_e2e/      # <model>: claude-opus-5, glm,
     │                         #   and `trajectory` (what the judge read; `complete: true` = full run)
     ├── calibration.json      # Diagnostic: judge's predictions of the verifier outcome vs actual
     ├── avg_score.json        # Average of pytest and rubric scores
-    └── attempt_N/            # Per-attempt score files (when --max-attempts > 1)
+    ├── pass@N.json           # pass@1..pass@N over N samples (only with --pass-at-k; N = samples run)
+    └── attempt_N/            # Per-attempt score files (when --max-attempts > 1 or --pass-at-k)
         ├── ctrf.json
         ├── test-stdout.txt
         ├── rubric_score.json
         ├── avg_score.json
         └── reward.json
 ```
+
+With `--pass-at-k`, `summary.json` also carries a `pass_at_k` block
+(`{n, c, pass@k: {...}}`) where `c` = samples that solved the task (`agent_success`).
 
 Agent evidence is collected outside `agent_output/`, which holds only the graded
 submission and its scores:
@@ -739,6 +775,48 @@ evidence/<task>/<model>/<timestamp>_e2e/
 `/output/crash.log`, then in the task's source tree) and staged into the verifier
 alongside `poc.bin` and `fix.patch`. Tasks that grade the agent's crash report read
 it there. A task that never asks for one simply collects nothing.
+
+### pass@k
+
+`--pass-at-k K` draws **K independent samples** of a task and reports the unbiased
+pass@k estimator (`1 - C(n-c, k) / C(n, k)`, Chen et al. 2021). It forces valid
+i.i.d. sampling: **all K attempts run** (no early stop on success) with **no
+cross-attempt feedback**, overriding `--max-attempts`. A sample counts as a solve
+by `agent_success` (all required stages pass), which is independent of the judge —
+so pass@k stays valid even if the rubric judge is unavailable for some samples.
+
+Results land in `verifier/pass@N.json` and the `pass_at_k` block of `summary.json`,
+where `n` = samples that actually ran (isolation/harness errors are excluded, so a
+run stopped early honestly reports pass@n, not pass@K).
+
+### Delivery bundle & TRUTH.md
+
+`--emit-bundle [DIR]` (default `delivery/`) reshapes a finished run into a
+per-model bundle; `scripts/reshape_bundle.py <run_dir> --out DIR` does the same
+after the fact (and works on a run stopped partway — it reconstructs from the
+per-attempt files, no `summary.json` needed):
+
+```
+<DIR>/<task>/
+├── TRUTH.md                     # grader-only ground-truth + scoring spec (see below)
+├── data/                        # the task definition, copied from tasks/<task>
+└── trajectories/<model>/
+    ├── pass_summary.json        # rollup: rewards, c_solved, pass@1..pass@n
+    └── run1/ run2/ ...          # one per attempt (attempt_N -> runN)
+        ├── config.json  result.json
+        ├── agent/{trajectory.json, agent.jsonl}
+        ├── verifier/{score,reward,ctrf,usage}.json
+        └── artifacts/{manifest.json, app/workspace/}
+```
+
+**TRUTH.md** is a grader-only ground-truth/answer-key doc per task (never shown to
+the agent). It is derived from the task's own artifacts by
+`scripts/gen_truth.py tasks/<task>` (or `--all`): the vulnerability metadata
+(`task.toml`), the reference PoC + `fix.patch`, the weighted oracle (stages +
+cheat gates from `test_weights.json`), and the rubric criteria (`rubric.json`).
+It lives at `tasks/<task>/TRUTH.md` and is copied into the bundle; regenerate it
+with `gen_truth.py` after editing a task's rubric or weights. It is not read by
+the runner or judge, so it never affects scoring.
 
 ### Run status values
 
@@ -762,7 +840,7 @@ Contains all run metadata and detailed results:
 {
   "task": "harfbuzz__arvo_62774",
   "agent": "claude-code",
-  "model": "claude-opus-5",              // "glm (server-mapped by Z.ai)" or the pinned id on a GLM run
+  "model": "claude-opus-5",              // "glm-5.3" on a GLM run
   "model_provider": "anthropic",         // "anthropic" | "bedrock" | "glm"
   "status": "success",
   "reward": 0.93,

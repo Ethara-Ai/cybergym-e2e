@@ -2,6 +2,9 @@
 """glm-login — Sign in to Z.ai with your browser (like `claude /login`).
 
 Flow (same OAuth used by Z.ai's official ZCode CLI):
+  Fastest path (no browser): ``glm login <key>`` or ``glm login --paste-key``
+  with a key from https://z.ai/manage-apikey/apikey-list.  Browser flow:
+
   1. Starts a tiny localhost callback server on a random free port
   2. Opens browser -> chat.z.ai login page (phone/email, however you log in)
   3. After approval the browser redirects to http://127.0.0.1:<port>/callback
@@ -238,24 +241,38 @@ def save_and_wire(full_key):
     print("           claude     → your normal Claude subscription (untouched)")
 
 
-def paste_key_login():
-    print("🔑 GLM Login (paste-key) — the simple, official way")
-    print("   1. Open this page and sign in to Z.ai:")
-    print(f"      {APIKEY_PAGE}")
-    print("   2. Click '+ Create a new API key' (or copy an existing one).")
-    print("   3. Paste the full key below (it looks like 'xxxxx.yyyyy').\n")
-    try:
-        webbrowser.open(APIKEY_PAGE)
-    except Exception:  # noqa: BLE001
-        pass
-    key = input("   API key> ").strip()
-    if not key or "." not in key:
+def looks_like_key(s):
+    """Z.ai keys are '<32 hex>.<secret>'; anything with a dot and no spaces or
+    slashes is close enough to accept from the command line."""
+    return bool(s) and "." in s and " " not in s and "/" not in s and not s.startswith("-")
+
+
+def paste_key_login(key=None):
+    if key is None:
+        print("🔑 GLM Login (paste-key) — the simple, official way")
+        print("   1. Open this page and sign in to Z.ai:")
+        print(f"      {APIKEY_PAGE}")
+        print("   2. Click '+ Create a new API key' (or copy an existing one).")
+        print("   3. Paste the full key below (it looks like 'xxxxx.yyyyy').\n")
+        try:
+            webbrowser.open(APIKEY_PAGE)
+        except Exception:  # noqa: BLE001
+            pass
+        key = input("   API key> ").strip()
+    if not looks_like_key(key):
         raise RuntimeError("That doesn't look like a Z.ai API key (expected 'id.secret').")
     save_and_wire(key)
 
 
 def main():
-    if "--paste-key" in sys.argv[1:] or "--key" in sys.argv[1:]:
+    args = sys.argv[1:]
+    # `glm login <key>` / `glm login --paste-key <key>`: take the key from the
+    # command line; `--paste-key` alone prompts for it.
+    positional = [a for a in args if not a.startswith("-")]
+    if positional:
+        paste_key_login(positional[0])
+        return
+    if "--paste-key" in args or "--key" in args:
         paste_key_login()
         return
     print("🥷 GLM Login — authenticate with your Z.ai account (Coding Plan)")
