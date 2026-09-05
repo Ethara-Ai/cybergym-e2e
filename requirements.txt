@@ -9,9 +9,8 @@
 tomli>=2.0.0,<3.0.0
 tomli-w>=1.0.0,<2.0.0
 
-# HTTP: the runner, judge, and OAuth/zbridge relays (httpx); legacy paths (requests).
+# HTTP: the runner, judge, and OAuth/zbridge relays.
 httpx>=0.27.0,<1.0.0
-requests>=2.31.0
 
 # Docker SDK (image pull / management helpers).
 docker>=7.0.0,<8.0.0
@@ -19,7 +18,6 @@ docker>=7.0.0,<8.0.0
 # OAuth / GLM relay bridges: scripts/claude_oauth, scripts/codex_oauth, scripts/zbridge.
 fastapi>=0.110.0,<1.0.0
 uvicorn>=0.29.0,<1.0.0
-pydantic>=2.0.0
 
 # LLM providers for the rubric judge and agent paths. These are GUARDED imports —
 # drop the ones you do not use:
@@ -27,10 +25,13 @@ pydantic>=2.0.0
 #   boto3      -> Bedrock provider
 #   openai     -> OpenAI-compatible / codex judge transport
 #   litellm    -> multi-provider routing (legacy run_agent / GLM paths)
-anthropic>=0.40.0
-boto3>=1.34.0
-openai>=1.30.0
-litellm>=1.40.0
+# Upper bounds matter here: unpinned, a fresh `pip install -r` resolves
+# anthropic 1.x while the tested venv runs 0.121.x. Raise a ceiling only after
+# testing the next major against scripts/utils.py.
+anthropic>=0.40.0,<1.0.0
+boto3>=1.34.0,<2.0.0
+openai>=1.30.0,<3.0.0
+litellm>=1.40.0,<2.0.0
 
 # Optional: the `hf` CLI used to download the benchmark data (see README Setup).
-huggingface_hub>=0.23.0
+huggingface_hub>=0.23.0,<2.0.0

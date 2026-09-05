@@ -46,8 +46,9 @@ order:
 
 1. `[bridge] ready` and `[finance] subscription account: <you>` — the bridge is
    up on **your** current `claude` login (the freshest credentials win). A GLM
-   run prints `[glm] Z.ai credential from ~/.zai_api_key; endpoint https://api.z.ai/api/anthropic`
-   instead, and `Model: glm-5.3`.
+   run prints `[glm] Z.ai credential from ~/.zai_api_key; starting zbridge on the
+   host...` and `[glm] zbridge ready: http://127.0.0.1:8820 -> https://api.z.ai/api/coding/paas/v4/chat/completions`
+   instead, then `Model: glm-5.3`.
 2. `Mode: e2e|patch-only` and `Required stages (from test_weights.json): [...]`
    — a patch-only task lists only the stages it grades.
 3. `Container:`, `Installing Claude Code`, then
@@ -102,9 +103,8 @@ sudo sysctl -w vm.mmap_rnd_bits=28
 Sign in for the two agents (one time each, on the host):
 ```bash
 claude /login                                # Opus 5: Claude Max/Pro subscription (see --claude-subscription)
-bash scripts/install_bridge_deps.sh          # fastapi/uvicorn/httpx for the OAuth bridge
-scripts/zai-bridge/install.sh                # GLM: puts `glm` and `glm-login` on PATH
-glm login --paste-key                        # paste a Z.ai dashboard key (the browser flow is currently rejected by Z.ai)
+bash scripts/install_bridge_deps.sh          # fastapi/uvicorn/httpx for the OAuth bridge and zbridge
+python3 run_harbor.py login --glm            # GLM: paste a Z.ai Coding Plan key (stored 0600 in ~/.zai_api_key)
 ```
 
 ## Running Tasks
@@ -159,11 +159,15 @@ python run_harbor.py tasks/harfbuzz__arvo_62774 \
 ```
 
 ```bash
-# GLM on a Z.ai Coding Plan (sign in once with scripts/zai-bridge/glm login)
+# GLM on a Z.ai Coding Plan (sign in once with `run_harbor.py login --glm`)
 python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm
 
 # ... a different GLM id (default glm-5.3)
 python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm --glm-model-id glm-5.3-flash
+
+# ... skip the vendored zbridge and use z.ai's own Anthropic shim
+# (that endpoint reports zero per-step input tokens, so it is not the default)
+python run_harbor.py tasks/harfbuzz__arvo_62774 --model-provider glm --glm-direct
 ```
 
 ### Two agents per task: Opus 5 and GLM
@@ -178,7 +182,7 @@ comparable.
 # Opus 5 (default provider)
 python run_harbor.py tasks/<task> --claude-subscription --cc-bridge-port 3456
 
-# GLM (after the one-time `scripts/zai-bridge/glm login`)
+# GLM (after the one-time `run_harbor.py login --glm`)
 python run_harbor.py tasks/<task> --model-provider glm
 ```
 
@@ -221,6 +225,8 @@ resolve the task from either layout.
 | `--anthropic-model-id` | `claude-opus-5` | Anthropic model ID for the agent |
 | `--bedrock-model-id` | `us.anthropic.claude-sonnet-4-5-20250929-v1:0` | Bedrock model ID |
 | `--glm-model-id` | `glm-5.3` | GLM model for `--model-provider glm`. Keep it pinned: Z.ai's own mapping of Claude ids lands on `glm-5.3-flash` |
+| `--glm-direct` | off | With `--model-provider glm`, skip the vendored zbridge and talk to z.ai's own Anthropic shim directly (env `GLM_DIRECT`). That endpoint reports zero per-step input tokens |
+| `--glm-bridge-port` | `8820` | Host port for the zbridge child (`+1` on collision) |
 | `--aws-region` | `us-west-2` | AWS region for Bedrock |
 | `--output-dir` | `agent_output/<task>/<model>/<timestamp>_e2e` | Custom output directory |
 | `--evidence-dir` | `evidence/<task>/<model>/<timestamp>_e2e` | Where agent evidence (`crash.log`) is collected, outside `agent_output/` |
@@ -249,7 +255,9 @@ resolve the task from either layout.
 | `ANTHROPIC_MODEL_ID` | Agent model; default `claude-opus-5` |
 | `BEDROCK_MODEL_ID` | Bedrock model id |
 | `AWS_REGION` | AWS region; default `us-west-2` |
-| `ZAI_API_KEY` | Z.ai credential for `--model-provider glm` when there is no `~/.zai_api_key` (from `scripts/zai-bridge/glm login`) |
+| `ZB_ZAI_API_KEY` | Z.ai Coding Plan credential for `--model-provider glm`. Checked first, in the environment, then in the repo-root `.env`, then `~/.zai_api_key` (what `run_harbor.py login --glm` writes) |
+| `ZAI_API_KEY` | Accepted everywhere `ZB_ZAI_API_KEY` is, as the older spelling |
+| `GLM_DIRECT` | Non-empty = same as `--glm-direct`: bypass zbridge |
 | `GLM_MODEL_ID` | GLM agent model; default `glm-5.3` |
 | `GLM_SMALL_MODEL_ID` | GLM model for the CLI's haiku-tier background calls; default `glm-5.3-flash` |
 | `GLM_API_TIMEOUT_MS` | Claude Code per-request timeout under `glm`; default `3000000` |
@@ -344,35 +352,38 @@ The bridge automatically kills any stale bridge process on the same port from a 
 ### GLM (Z.ai Coding Plan) Mode
 
 `--model-provider glm` runs the same in-container Claude Code agent on a Z.ai
-GLM Coding Plan, the way `scripts/zai-bridge/glm` runs an interactive session:
-Claude Code talks to Z.ai's Anthropic-compatible endpoint
-(`https://api.z.ai/api/anthropic`) directly. There is no proxy.
+GLM Coding Plan. By default it routes through the **vendored zbridge**
+(`scripts/zbridge/`, launched on the host by `scripts/glm_bridge.py`), which
+speaks Z.ai's OpenAI-compatible Coding Plan schema
+(`https://api.z.ai/api/coding/paas/v4/chat/completions`) and translates to and
+from the Anthropic protocol the CLI expects. `--glm-direct` is the older path:
+the agent talks to z.ai's own Anthropic shim (`https://api.z.ai/api/anthropic`)
+with no proxy. That shim does not front the Coding Plan and its streamed
+`message_start` reports zero input tokens, which is why the bridge is the
+default — go direct only to compare the two.
 
 **Sign in once (host):**
 
 ```bash
-scripts/zai-bridge/install.sh              # optional: puts `glm` and `glm-login` on PATH
-scripts/zai-bridge/glm login --paste-key   # paste a key from https://z.ai/manage-apikey/apikey-list
-scripts/zai-bridge/glm login               # browser OAuth alternative (see note)
+bash scripts/install_bridge_deps.sh   # fastapi/uvicorn/httpx, needed by zbridge
+python3 run_harbor.py login --glm     # paste a key from https://z.ai/manage-apikey/apikey-list
 ```
 
-Use `--paste-key`. As of 2026-09-04 the browser flow ends at Z.ai with
-`{"detail": "Redirect URI not registered for this client"}`: the authorize
-step accepts the loopback callback, but the approval step after login rejects
-it, and the redirect the ZCode client actually registers is not public. Nothing
-in the script can fix that; the dashboard key is the documented way to use the
-Coding Plan with Claude Code anyway.
+The key lands in `~/.zai_api_key` (mode 600). On a host where you cannot paste
+interactively — CI, a container — set `ZB_ZAI_API_KEY` in the environment or in
+the repo-root `.env` instead; both outrank the key file, so an injected
+credential is never shadowed by a stale one left on disk.
 
-The credential lands in `~/.zai_api_key` (mode 600). `glm logout` removes it.
-`ZAI_API_KEY` in `.env` is the fallback for a host without a browser. See
-`scripts/zai-bridge/README.md` and `TEAM-GUIDE.md` for the flow, verification
-and troubleshooting; `glm` on its own launches an interactive Claude Code on
-the plan, while your normal `claude` command stays on the Anthropic subscription.
+`scripts/zai-bridge/` is the older standalone tool that pointed an *interactive*
+Claude Code session at Z.ai. It still works and its `glm login` writes the same
+`~/.zai_api_key`, but the runner no longer uses it; see its `README.md` and
+`TEAM-GUIDE.md` if you want an interactive GLM session alongside your normal
+`claude` command.
 
 **What the runner does:**
-1. Reads the key from `~/.zai_api_key` (else `ZAI_API_KEY`) and fails at startup with the sign-in command if neither exists
-2. Passes the agent `ANTHROPIC_BASE_URL=https://api.z.ai/api/anthropic`, `ANTHROPIC_AUTH_TOKEN=<key>` (never `ANTHROPIC_API_KEY`, which makes Claude Code raise a trust prompt) and `API_TIMEOUT_MS=3000000`
-3. Locks the container network the same way as a plain Anthropic key: `api.z.ai` is resolved once, pinned in `/etc/hosts`, and only it is reachable on 443 through the one-port relay
+1. Resolves the credential in order — `ZB_ZAI_API_KEY` / `ZAI_API_KEY` in the environment, then the repo-root `.env`, then `~/.zai_api_key` — and fails at startup with the sign-in command if none carries one
+2. Starts zbridge on the host (port `8820`, `+1` on collision, or `--glm-bridge-port`) and points the agent at it: `ANTHROPIC_BASE_URL=http://host.docker.internal:<port>` with a per-run stub secret as `ANTHROPIC_AUTH_TOKEN`/`ANTHROPIC_API_KEY`. **The real Z.ai key never enters the container** — it stays in the bridge process on the host
+3. Locks the container network to the bridge only: the host gateway on that one port, the same `bridge` lockdown mode `--claude-subscription` uses. Under `--glm-direct` it is `api` mode instead — `api.z.ai` resolved once, pinned in `/etc/hosts`, reachable on 443 through the one-port relay, and the real key is passed to the agent as `ANTHROPIC_AUTH_TOKEN` (never `ANTHROPIC_API_KEY`, which makes Claude Code raise a trust prompt)
 4. Stores the run under `agent_output/<task>/glm-5.3/<timestamp>_e2e/` (the model id), next to the Opus 5 runs in `agent_output/<task>/claude-opus-5/`; the evidence tree mirrors it
 5. Pins the model: `ANTHROPIC_MODEL` and the CLI's opus/sonnet aliases are set to `--glm-model-id` (default `glm-5.3`), the haiku alias to `GLM_SMALL_MODEL_ID` (default `glm-5.3-flash`). Measured on 2026-09-04, Z.ai's own mapping sends `claude-opus-5`, `claude-sonnet-5` and `claude-haiku-4-5` all to `glm-5.3-flash`, so an unpinned run would benchmark the small model. `GLM_MODEL_ID=` (blank) opts back into server mapping and records `model: glm (server-mapped by Z.ai)`
 
@@ -404,7 +415,9 @@ scripts/judge_lib.py     the judge: prompts, transports, scoring, anomalies
 scripts/judge.py         CLI for re-judging a trajectory (writes rubric_score.json only)
 scripts/rejudge_sync.py  after a re-judge: re-derive reward files + calibration in place
 scripts/codex_oauth/     OAuth bridge for judging through a ChatGPT subscription
-scripts/zai-bridge/      Z.ai sign-in (`glm login`) + interactive `glm` launcher for the GLM provider
+scripts/zbridge/         vendored Z.ai Coding Plan bridge used by --model-provider glm
+scripts/glm_bridge.py    host-side launcher that starts zbridge for a run
+scripts/zai-bridge/      older standalone `glm` launcher for interactive sessions (not used by the runner)
 run_harbor.py            imports judge_lib for the scoring pass
 ```
 
