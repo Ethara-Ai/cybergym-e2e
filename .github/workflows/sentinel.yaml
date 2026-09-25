@@ -1,0 +1,81 @@
+# Candidate-side diagnostic only. It has no secret, dispatch, delivery, or release authority and never
+# runs candidate scripts. Authoritative observation lives in the separately governed workflow.
+
+name: sentinel
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  static-probe:
+    name: gate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require an immutable reviewed probe
+        shell: bash
+        env:
+          PROBE_REPO: ${{ vars.TRINITY_PROBE_REPO }}
+          PROBE_SHA: ${{ vars.TRINITY_PROBE_SHA }}
+        run: |
+          set -euo pipefail
+          test -n "$PROBE_REPO"
+          [[ "$PROBE_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Check out candidate data without credentials or submodules
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          submodules: false
+          fetch-depth: 2
+          path: ./candidate-data
+
+      - name: Check out the reviewed static probe
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ vars.TRINITY_PROBE_REPO }}
+          ref: ${{ vars.TRINITY_PROBE_SHA }}
+          persist-credentials: false
+          fetch-depth: 1
+          path: ./trusted-probe
+
+      - name: Verify probe identity and inspect bytes only
+        shell: bash
+        env:
+          PROBE_SHA: ${{ vars.TRINITY_PROBE_SHA }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ./.trinity-runtime
+          chmod 700 ./.trinity-runtime
+          test "$(git -C ./trusted-probe rev-parse HEAD)" = "$PROBE_SHA"
+          git -C ./candidate-data diff-tree --no-commit-id --name-only -r HEAD > ./.trinity-runtime/changed-paths
+          python3 ./trusted-probe/tools/incident_probe.py ./candidate-data --changed-paths ./.trinity-runtime/changed-paths > ./.trinity-runtime/probe.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          result = json.loads(Path('./.trinity-runtime/probe.json').read_text(encoding='utf-8'))
+          print(json.dumps(result, indent=2, sort_keys=True))
+          if result['codes']:
+              raise SystemExit(1)
+          PY
+
+      - name: Rerun the push admission on the pushed commit
+        # Direct pushes to main are lawful, so the pre-push hook is the admission and this
+        # step is the rerun that names a bypassed hook. Both commands are pure functions of
+        # candidate bytes, run from the pinned probe checkout, and never execute a candidate
+        # script: the tree must equal its own reconciliation and every queue stream must
+        # extend, never rewrite, the stream the previous commit held.
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ./trusted-probe/tools/pipeline.py reconcile ./candidate-data --check
+          if git -C ./candidate-data rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null && git -C ./candidate-data rev-parse --verify --quiet 'HEAD^^{commit}' >/dev/null; then
+            previous="$(git -C ./candidate-data rev-parse 'HEAD^')"
+            python3 ./trusted-probe/tools/pipeline.py verify ./candidate-data --accepted "$previous"
+          else
+            python3 ./trusted-probe/tools/pipeline.py verify ./candidate-data
+          fi

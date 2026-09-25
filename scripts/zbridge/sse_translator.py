@@ -30,10 +30,13 @@ _INPUT_SIDE_KEYS = (
 
 
 def _input_side(usage: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Just the prompt-side fields of an Anthropic usage object, or None."""
+    """The prompt-side fields of an Anthropic usage object, plus the reasoning
+    split (known for the whole message in buffered mode); or None."""
     if not isinstance(usage, dict):
         return None
     out = {k: usage[k] for k in _INPUT_SIDE_KEYS if usage.get(k) is not None}
+    if isinstance(usage.get("output_tokens_details"), dict):
+        out["output_tokens_details"] = usage["output_tokens_details"]
     return out or None
 
 

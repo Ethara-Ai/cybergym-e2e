@@ -1,0 +1,40 @@
+# harbor.lock: pin the Harbor delivery-format release this harness's bundles
+# conform to.
+#
+# trinity/FORGE.md:187 requires this to be one exact stable Harbor release,
+# chosen at batch open and re-pinned whenever the currency gate reports the
+# pin one minor release or thirty days behind that record.
+#
+# The `harbor_release` field must resolve to one exact stable Harbor release
+# identifier before the harness is considered pinning-complete; without a
+# concrete value the pin is a named coverage gap in EDICT.md capping at
+# HOLD:PILOT_REQUIRED. Re-pinning is a human action, triggered by the
+# currency_gate below.
+
+# Trinity-local schema pin. Harbor itself validates no schema_version
+# allowlist, so this restricts what bundles this harness will accept.
+# The value matches every existing bundle's task.toml.
+schema_version = "1.4"
+
+# Harbor release identifier. Resolved from the parent-root currency oracle
+# `harbor.lock` (latest_version 0.23.0, released 2026-09-12T04:55:11Z from
+# pypi, resolved 2026-09-17T08:53:53Z) and bound by `.seed/contract.yaml`
+# delivery.harbor_release at Phase 0.5. Re-pin when the currency gate reports
+# this value one minor release or thirty days behind that record.
+harbor_release = "0.23.0"
+
+# Reward-output paths Harbor fixes. Recorded here for auditability so the
+# bundle's tests/test.sh and this harness agree on the handoff surface.
+reward_json_path = "/logs/verifier/reward.json"
+reward_txt_path = "/logs/verifier/reward.txt"
+
+[currency_gate]
+# Re-pin when the current pin is at least this many minor releases behind
+# Harbor's own latest stable, or this many days old, whichever fires first.
+max_minor_lag = 1
+max_age_days = 30
+
+[coverage_gaps]
+# Every entry here caps the batch at HOLD:PILOT_REQUIRED until resolved.
+# harbor_release is pinned (see field above); no gap remains open in this file.
+gaps = []

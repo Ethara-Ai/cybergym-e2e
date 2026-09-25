@@ -1,0 +1,54 @@
+{
+  "schemaVersion": "trinity.harness-config/v1",
+  "harnessName": "kakashi-cybergym-e2e",
+  "harnessVersion": "0.1.0",
+  "modelId": "anthropic/claude-opus-5",
+  "modelSnapshot": "claude-opus-5",
+  "adapter": "anthropic",
+  "bridgeEndpointClass": "direct_api_and_bridge",
+  "contextWindowTokens": 200000,
+  "maxOutputTokens": 16000,
+  "compactionPolicy": {
+    "enabled": false,
+    "trigger": "none",
+    "thresholdTokens": 150000
+  },
+  "observationTruncation": {
+    "maxMessageChars": 100000,
+    "maxObservationChars": 20000
+  },
+  "maxTurns": 300,
+  "maxIterations": 300,
+  "toolCallCap": 300,
+  "wallClockTimeoutSeconds": 5400,
+  "temperature": 1.0,
+  "topP": 1.0,
+  "seed": 0,
+  "systemPromptDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "sandbox": {
+    "cpuMillicores": 2000,
+    "memoryBytes": 8589934592
+  },
+  "networkPolicy": "none",
+  "retryPolicy": {
+    "maxRetries": 4,
+    "retryOnStatus": [
+      429,
+      500,
+      502,
+      503,
+      504
+    ]
+  },
+  "reasoningEffort": "high",
+  "condenserConfig": {
+    "type": "none",
+    "enabled": false
+  },
+  "configurationAdequacy": {
+    "approvedBy": "takhshishbano-ethara",
+    "approvalSource": "requirements",
+    "headroomArgument": "Declared limits are adequate for the horizon defined in requirements/client-requirements.md \u00a7 1 (100-300 turns, up to 8M tokens/trajectory): contextWindowTokens=200000 covers observed rollout envelopes; maxOutputTokens=16000 covers observed outputs; wallClockTimeoutSeconds=5400 (90min) exceeds the 43min p95 observed in the pyjwt signed pilot by 2.1x; toolCallCap=300 matches \u00a7 1's 100-300 target; sandbox 2vCPU/8GB is the container spec every recorded rollout ran under. Adequacy for systemPromptDigest is DEFERRED per the harness-owned-prompt gap: the harness is a passthrough proxy to the agent CLI; system-prompt bytes are constructed at runtime by claude-code / codex and are not stable across agent CLI upgrades. Adequacy for this dimension resumes only after a harness-owned system-prompt overlay is introduced and its bytes are frozen, OR after the agent CLI version is pinned and its emitted system-prompt bytes are captured and digested.",
+    "approvedAt": "2026-09-21T14:32:00Z"
+  }
+}

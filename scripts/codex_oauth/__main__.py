@@ -28,8 +28,10 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[codex-bridge] credentials error: {e}", file=sys.stderr)
         return 2
 
+    account = provider.account_id
+    account_prefix = account[:8] + "..." if account else "not stored"
     print(f"[codex-bridge] credentials OK (token prefix: {token[:12]}..., "
-          f"account: {provider.account_id[:8]}...)")
+          f"account: {account_prefix})")
     if args.check:
         return 0
 

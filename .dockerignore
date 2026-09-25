@@ -1,0 +1,31 @@
+# Never bake runtime state, secrets, or lane-root pollution into the image.
+.env
+.env.local
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+
+agent_output/
+run_logs/
+evidence/
+deliverables/
+tasks/
+dataset/
+raw_data/
+input/
+judge/
+
+.git/
+.gitignore
+
+# Files that self-reference the built image digest; excluded to make the
+# image content-addressable without a build-time loop.
+harness-config.json
+harness-provenance.yaml
+README.md
+OPEN_ISSUES.md
+Dockerfile
+.dockerignore
+.githooks/

@@ -28,6 +28,94 @@ _LOG = logging.getLogger(__name__)
 # >= 60 seconds (typically thousands).
 TRANSIENT_RETRY_AFTER_THRESHOLD = 60
 
+# Subscription (Pro/Max OAuth) accounts are governed by two independent rolling
+# windows -- 5-hour and 7-day -- reported through the "unified" header family.
+# These are NOT the same as the per-minute token/request buckets below: a
+# metered API key hits those, a subscription hits these. Reading only the
+# token/request buckets meant a real 5-hour cap parsed as "no reset known" and
+# fell back to a 300s cooldown, so the account was re-probed every 5 minutes
+# for 5 hours instead of once at the real reset.
+UNIFIED_STATUS_HEADER = "anthropic-ratelimit-unified-status"
+UNIFIED_CLAIM_HEADER = "anthropic-ratelimit-unified-representative-claim"
+
+# "representative-claim" names whichever window is currently binding.
+_CLAIM_RESET_HEADERS = {
+    "five_hour": "anthropic-ratelimit-unified-5h-reset",
+    "seven_day": "anthropic-ratelimit-unified-7d-reset",
+}
+
+_UNIFIED_RESET_HEADERS = (
+    "anthropic-ratelimit-unified-reset",
+    "anthropic-ratelimit-unified-5h-reset",
+    "anthropic-ratelimit-unified-7d-reset",
+)
+
+_BUCKET_RESET_HEADERS = (
+    "anthropic-ratelimit-unified-tokens-reset",
+    "anthropic-ratelimit-unified-requests-reset",
+    "anthropic-ratelimit-tokens-reset",
+    "anthropic-ratelimit-requests-reset",
+)
+
+
+def unified_status_rejects(headers: Mapping[str, str]) -> bool:
+    """True when Anthropic says this account is out for the current window.
+
+    Anything other than "allowed" is an account-level verdict that no amount of
+    retrying or token refreshing clears -- only a different account will. It
+    outranks a short retry-after, which would otherwise keep us hammering an
+    account whose 5-hour quota is already spent.
+    """
+    # EXACT key only. Live responses also carry
+    # "anthropic-ratelimit-unified-overage-status", which reads "rejected" on a
+    # perfectly healthy account whose org has overage billing disabled. Any
+    # loosening to a suffix/substring match here would cap every account on
+    # every request -- see test_overage_status_rejected_is_not_a_cap.
+    val = headers.get(UNIFIED_STATUS_HEADER) or headers.get(UNIFIED_STATUS_HEADER.lower())
+    if isinstance(val, str) and val.strip().lower() not in ("", "allowed"):
+        return True
+    return any(_window_rejected(headers, w) for w in ("5h", "7d"))
+
+
+def _window_rejected(headers: Mapping[str, str], window: str) -> bool:
+    """True when the named window ("5h"/"7d") reports a non-allowed status."""
+    name = f"anthropic-ratelimit-unified-{window}-status"
+    val = headers.get(name) or headers.get(name.lower())
+    return isinstance(val, str) and val.strip().lower() not in ("", "allowed")
+
+
+def _resolve_unified_reset(headers: Mapping[str, str]) -> Optional[float]:
+    """Absolute Unix time the binding subscription window resets.
+
+    Order matters. A live response carries resets for BOTH windows at once
+    (5h and 7d, ~6 days apart), so picking the wrong one either re-probes a
+    capped account for days or parks a healthy one for a week:
+
+      1. The window whose own status is not "allowed" -- it is the one that
+         actually refused this request.
+      2. Otherwise "representative-claim", which names the binding window.
+      3. Otherwise the aggregate/first available reset.
+    """
+    for window in ("5h", "7d"):
+        if _window_rejected(headers, window):
+            val = _parse_iso_header(headers, f"anthropic-ratelimit-unified-{window}-reset")
+            if val is not None:
+                return val
+
+    claim = headers.get(UNIFIED_CLAIM_HEADER) or headers.get(UNIFIED_CLAIM_HEADER.lower())
+    if isinstance(claim, str):
+        named = _CLAIM_RESET_HEADERS.get(claim.strip().lower())
+        if named:
+            val = _parse_iso_header(headers, named)
+            if val is not None:
+                return val
+
+    for name in _UNIFIED_RESET_HEADERS:
+        val = _parse_iso_header(headers, name)
+        if val is not None:
+            return val
+    return None
+
 
 class ErrorKind(str, Enum):
     """Coarse classification of an Anthropic API error."""
@@ -115,12 +203,14 @@ def extract_retry_after(headers: Mapping[str, str]) -> Optional[int]:
         return explicit
 
     now = time.time()
-    for key in (
-        "anthropic-ratelimit-unified-tokens-reset",
-        "anthropic-ratelimit-unified-requests-reset",
-        "anthropic-ratelimit-tokens-reset",
-        "anthropic-ratelimit-requests-reset",
-    ):
+    # Subscription windows first: on a Pro/Max account they are the binding
+    # limit, and the per-bucket headers are often absent entirely.
+    unified = _resolve_unified_reset(headers)
+    if unified is not None:
+        delta = int(unified - now)
+        if delta > 0:
+            return delta
+    for key in _BUCKET_RESET_HEADERS:
         reset_at = _parse_iso_header(headers, key)
         if reset_at is not None:
             delta = int(reset_at - now)
@@ -131,12 +221,10 @@ def extract_retry_after(headers: Mapping[str, str]) -> Optional[int]:
 
 def _extract_reset_at(headers: Mapping[str, str]) -> Optional[float]:
     """Absolute Unix-time when the most relevant rate-limit bucket resets."""
-    for key in (
-        "anthropic-ratelimit-unified-tokens-reset",
-        "anthropic-ratelimit-unified-requests-reset",
-        "anthropic-ratelimit-tokens-reset",
-        "anthropic-ratelimit-requests-reset",
-    ):
+    unified = _resolve_unified_reset(headers)
+    if unified is not None:
+        return unified
+    for key in _BUCKET_RESET_HEADERS:
         v = _parse_iso_header(headers, key)
         if v is not None:
             return v
@@ -212,6 +300,11 @@ def classify_anthropic_error(
         if retry_after is None and tokens_remaining is None:
             # No hint at all: assume the 5-hour subscription cap rather than
             # burning retries against it (the conservative reading).
+            is_cap = True
+        if unified_status_rejects(headers):
+            # Outranks everything above: the server has said this account is
+            # out for the window, so a short retry-after is not an invitation
+            # to retry the same account.
             is_cap = True
         kind = ErrorKind.SUBSCRIPTION_CAP if is_cap else ErrorKind.TRANSIENT_THROTTLE
         return ClassifiedError(

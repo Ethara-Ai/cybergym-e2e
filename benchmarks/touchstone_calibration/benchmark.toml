@@ -1,0 +1,84 @@
+# Trinity-required per-benchmark self-describing configuration.
+#
+# trinity/FORGE.md:184 requires "one self-describing directory per benchmark
+# carrying its configuration defaults; an inference entry point and a
+# separate evaluation entry point registered on the shared command line; an
+# implementation of the shared evaluation interface's three duties".
+#
+# This benchmark is the touchstone-calibration probe surface: run_harbor.py
+# consumes bundles that scripts/touchstone_shim.py has synthesised from
+# touchstones/<case>/ into Harbor shape. Every rollout under this benchmark
+# is Bucket-N advisory per trinity/FORGE.md line 32 (.seed/probe.yaml) and
+# NEVER contributes to a SHIP disposition.
+
+[benchmark]
+name = "touchstone_calibration"
+description = "Calibration probes derived from touchstones/<case>/ by scripts/touchstone_shim.py. Runnable by run_harbor.py once shimmed into Harbor shape. Bucket-N advisory; never difficulty evidence."
+task_mode = "e2e"
+
+# Where this benchmark reads shimmed bundles from. The shim writes to
+# derived/touchstones/<case>/ (gitignored, harness-private). The cybergym_e2e
+# benchmark reads from samples/ and delivery/; this one deliberately does
+# not, because a calibration probe must never be promoted into a lane root.
+lane_root_indirection = ["derived/touchstones"]
+
+# Harbor release the bundles conform to; resolves to ../../harbor.lock.
+harbor_release_ref = "../../harbor.lock"
+
+[entry_points]
+# The shim is the extra step this benchmark needs before run_harbor.py can
+# resolve a task_dir; run_harbor.py itself is unchanged and handles the
+# resulting Harbor-shaped bundle through the same code path cybergym_e2e uses.
+shim = "../../scripts/touchstone_shim.py"
+inference = "../../run_harbor.py"
+evaluation = "../../run_harbor.py"
+
+[three_duties]
+# trinity/FORGE.md:184 shared-evaluation-interface three duties.
+prepare_instance = "scripts/touchstone_shim.py::emit_bundle (canonicalises a touchstone bundle into Harbor shape, uuid5 in FORGE_TASK_NAMESPACE over its bytes)"
+prepare_sandbox = "run_harbor.py::build_image + run_agent_container (reused from cybergym_e2e; the shimmed bundle's environment/Dockerfile builds against the ARVO vulnerable base image)"
+evaluate_instance = "run_harbor.py::run_verifier (reused; scoring delegated to the shimmed bundle's tests/test.sh, which drives tests/validate.py through four stages)"
+
+[defaults]
+# Configuration defaults for touchstone_calibration.
+timeout_seconds = 5400
+max_attempts = 1
+pass_at_k = 1
+
+# The judge is intentionally disabled for calibration probes: a probe grades
+# stages 1-4 deterministically and a rubric channel would add cost without
+# adding calibration signal. run_harbor.py's --no-judge flag opts out; a
+# future refactor may lift this default into the benchmark descriptor itself.
+judge_disabled_by_default = true
+
+output_dir_template = "agent_output/<task>/<model>/<timestamp>_calibration"
+
+isolation_lockdown = true
+isolation_shared_network = false
+network_mode = "internal_with_bridge_relay"
+
+verifier_reward_json = "/logs/verifier/reward.json"
+verifier_reward_txt = "/logs/verifier/reward.txt"
+reward_range_min = 0.0
+reward_range_max = 1.0
+reward_formula = "sum(passed positive weights) / sum(positive weights)"
+
+[trinity_calibration]
+# Every shimmed bundle carries [trinity_calibration] never_ship = true and
+# bucket = "N" in its task.toml. Nothing under derived/touchstones/ may be
+# copied into samples/ or delivery/; a promotion attempt violates FORGE.md
+# rule 6 (difficulty measured, never claimed).
+never_ship = true
+bucket = "N"
+provenance = "trinity/FORGE.md line 32 (.seed/probe.yaml carve-out); trinity/FORGE.md rule 6 (difficulty measured, never claimed)"
+
+[coverage_gaps]
+# Each gap here caps a probe outcome at HOLD:PILOT_REQUIRED for any downstream
+# use that treats it as difficulty evidence. Probes stay Bucket-N regardless.
+gaps = [
+  "Stage 4 held-out reproducer is the touchstone's own poc.bin: the agent has never seen it, but the human calibrator did, so this is 'held-out from the agent' not 'held-out from the corpus'.",
+  "Touchstone verdicts under touchstones/README.md remain empty; a shimmed bundle inherits the touchstone's unadjudicated status.",
+  "No LLM judge is wired in; only the deterministic 4-stage grader runs. A rubric channel would require per-bundle rubric authoring, which the shim does not synthesise.",
+  "Vulnerable-image derivation is a heuristic strip of the '-fix' suffix on the ARVO tag; a touchstone with a non-ARVO convention needs --vul-image explicitly.",
+  "The touchstone's own test.sh is executed verbatim inside the agent's image, so a project whose test target was authored against a different repo layout may exit non-zero for reasons unrelated to the patch. Stage 3 outcomes are advisory only.",
+]

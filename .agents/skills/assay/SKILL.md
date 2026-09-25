@@ -1,36 +1,15 @@
-# Assay
+---
+name: assay
+description: "CRUCIBLE scope-approval gate. Recomputes the live SHA-256 of .audit/scope.yaml against .audit/scope.approved and refuses every mutation until the two match. USE FOR: CRUCIBLE scope approval, .audit/ mutation checks, verifying approved audit scope bytes before audit work."
+---
 
-CRUCIBLE scope-approval gate. Recomputes the live SHA-256 of `audit/scope.yaml`
-and refuses every mutation until it matches `audit/scope.approved`. Fails closed
-on mismatch or absence.
+# assay
 
-This is the scope gate, not the verify gate. `crucible verify` is the command
-whose success means the full audit gate passed.
+Assay is the scope-approval gate CRUCIBLE owns. It recomputes the live SHA-256 of `.audit/scope.yaml` and compares it against the digest a human signed into `.audit/scope.approved`. It refuses every mutation until the recomputed digest matches that approval. A missing, unreadable, or mismatched approval fails closed rather than passing. It is distinct from the `crucible verify` success gate.
 
-## Usage
+`trinity/CRUCIBLE.md` is the authority for what this door binds and when it runs. Read it and follow it; this door adds nothing to it and restates none of it.
 
-Invoke before any phase that writes audit harness files. The gate must pass
-before Phase 1 scaffolding proceeds.
+Run the parent gate at both moments, before any phase work and again before the root report, from the parent project root, the directory whose direct child is the `trinity/` submodule:
 
-## Procedure
-
-1. Compute `shasum -a 256 audit/scope.yaml`.
-2. Read `audit/scope.approved`.
-3. If `audit/scope.approved` is absent, halt and report. No writes proceed.
-4. If the digest does not match, halt and report the mismatch. No writes proceed.
-5. If matched, report approval is current and proceed.
-
-## Approval instruction
-
-To approve the current scope:
-
-```bash
-shasum -a 256 audit/scope.yaml | awk '{print $1}' > audit/scope.approved
-```
-
-Review `audit/scope.yaml` before approving. Re-scoping, widening ignore lists,
-or flipping a capability invalidates prior approval and requires a new sign-off.
-
-## Authority
-
-Defers to `trinity/CRUCIBLE.md` Phase 0.5. This skill never restates the contract.
+    just --justfile trinity/tools/justfile parent-gate instrument=CRUCIBLE moment=preflight
+    just --justfile trinity/tools/justfile parent-gate instrument=CRUCIBLE moment=report

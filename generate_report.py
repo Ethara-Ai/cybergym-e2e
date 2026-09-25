@@ -57,9 +57,7 @@ def repo_path():
 
 def create_backup():
     if not Path("/src_backup").exists():
-        r = subprocess.run(
-            "sudo cp -a /src /src_backup",
-            shell=True, capture_output=True, text=True, timeout=600,
+        r = subprocess.run(["sudo", "cp", "-a", "/src", "/src_backup"], shell=False, capture_output=True, text=True, timeout=600,
         )
         if r.returncode != 0:
             raise RuntimeError(f"Backup failed: {r.stderr[-300:]}")
@@ -73,11 +71,17 @@ def restore_src():
     if cwd.startswith("/src"):
         os.chdir("/")
     r = subprocess.run(
-        "sudo rm -rf /src && sudo cp -a /src_backup /src",
-        shell=True, capture_output=True, text=True, timeout=600,
+        ["sudo", "rm", "-rf", "/src"],
+        capture_output=True, text=True, timeout=600,
     )
     if r.returncode != 0:
-        raise RuntimeError(f"Restore failed: {r.stderr[-300:]}")
+        raise RuntimeError(f"Restore failed (rm): {r.stderr[-300:]}")
+    r = subprocess.run(
+        ["sudo", "cp", "-a", "/src_backup", "/src"],
+        capture_output=True, text=True, timeout=600,
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"Restore failed (cp): {r.stderr[-300:]}")
     if os.path.isdir(cwd):
         os.chdir(cwd)
     else:
@@ -86,10 +90,18 @@ def restore_src():
 
 def apply_patch(rpath, patch_file):
     """Same order as the verifier: git apply, then patch -p1/-p0/-p2/-p3."""
-    cmds = [f"sudo git apply {patch_file}"]
-    cmds += [f"sudo patch --batch --forward -p{n} < {patch_file}" for n in (1, 0, 2, 3)]
-    for cmd in cmds:
-        r = subprocess.run(cmd, shell=True, cwd=str(rpath), capture_output=True, text=True)
+    r = subprocess.run(
+        ["sudo", "git", "apply", str(patch_file)],
+        cwd=str(rpath), capture_output=True, text=True,
+    )
+    if r.returncode == 0:
+        return True
+    for n in (1, 0, 2, 3):
+        with open(patch_file, "rb") as pf:
+            r = subprocess.run(
+                ["sudo", "patch", "--batch", "--forward", f"-p{n}"],
+                stdin=pf, cwd=str(rpath), capture_output=True, text=True,
+            )
         if r.returncode == 0:
             return True
     return False
@@ -97,8 +109,8 @@ def apply_patch(rpath, patch_file):
 
 def compile_src():
     r = subprocess.run(
-        "sudo -E bash -eux /src/compile.sh",
-        shell=True, cwd="/src", capture_output=True, text=True,
+        ["sudo", "-E", "bash", "-eux", "/src/compile.sh"],
+        cwd="/src", capture_output=True, text=True,
         timeout=COMPILE_TIMEOUT, errors="replace",
     )
     return r.returncode == 0, r
@@ -106,8 +118,8 @@ def compile_src():
 
 def run_poc(poc_path):
     r = subprocess.run(
-        f"sudo -E bash -ux /src/run_poc.sh {poc_path}",
-        shell=True, cwd="/src", capture_output=True, text=True,
+        ["sudo", "-E", "bash", "-ux", "/src/run_poc.sh", str(poc_path)],
+        cwd="/src", capture_output=True, text=True,
         timeout=RUN_TIMEOUT, errors="replace",
     )
     return r
@@ -115,8 +127,8 @@ def run_poc(poc_path):
 
 def run_tests():
     r = subprocess.run(
-        "sudo -E bash -eux /src/test.sh",
-        shell=True, cwd="/src", capture_output=True, text=True,
+        ["sudo", "-E", "bash", "-eux", "/src/test.sh"],
+        cwd="/src", capture_output=True, text=True,
         timeout=TEST_TIMEOUT, errors="replace",
     )
     return r.returncode == 0
@@ -252,8 +264,8 @@ def main():
         print("  Running prepare.sh")
         try:
             subprocess.run(
-                "sudo -E bash -eux /src/prepare.sh",
-                shell=True, cwd="/src", capture_output=True, text=True,
+                ["sudo", "-E", "bash", "-eux", "/src/prepare.sh"],
+                cwd="/src", capture_output=True, text=True,
                 timeout=PREPARE_TIMEOUT, errors="replace",
             )
         except Exception as e:
@@ -265,7 +277,7 @@ def main():
     if POC_PATH.exists():
         print("  [Stage 1] Compiling vulnerable build...")
         restore_src()
-        subprocess.run(f"sudo cp {POC_PATH} /src/poc.bin", shell=True, capture_output=True)
+        subprocess.run(["sudo", "cp", str(POC_PATH), "/src/poc.bin"], capture_output=True)
         ok, comp = compile_src()
         report["vuln_build"]["ok"] = ok
         if ok:
@@ -289,7 +301,7 @@ def main():
         applied = apply_patch(rpath, PATCH_PATH)
         report["patch"]["applies"] = applied
         if applied:
-            subprocess.run(f"sudo cp {POC_PATH} /src/poc.bin", shell=True, capture_output=True)
+            subprocess.run(["sudo", "cp", str(POC_PATH), "/src/poc.bin"], capture_output=True)
             ok, comp = compile_src()
             report["patched_build"]["ok"] = ok
             if ok:
@@ -329,7 +341,7 @@ def main():
         compile_src()
         # Stage the GT PoC exactly as stages 1/2 stage the agent PoC, for
         # run_poc.sh variants that read /src/poc.bin and ignore $1.
-        subprocess.run(f"sudo cp {GT_POC_PATH} /src/poc.bin", shell=True, capture_output=True)
+        subprocess.run(["sudo", "cp", str(GT_POC_PATH), "/src/poc.bin"], capture_output=True)
         r = run_poc(str(GT_POC_PATH))
         if _has_sanitizer(r):
             crash_info = parse_asan_output(r.stderr)

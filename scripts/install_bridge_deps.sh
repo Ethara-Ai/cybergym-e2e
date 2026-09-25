@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Host-side deps for the Claude Code subscription bridge (scripts/claude_oauth).
+# Host-side deps for the three relay bridges: the Claude Code subscription
+# bridge (scripts/claude_oauth), the codex judge bridge (scripts/codex_oauth)
+# and the Z.ai Coding Plan bridge (scripts/zbridge, started by glm_bridge.py).
 #
-# The bridge runs on the HOST (not in the task container) using the same Python
-# that runs run_agent.py, so install these into that interpreter. httpx is
+# They all run on the HOST (not in the task container) using the same Python
+# that runs run_harbor.py, so install these into that interpreter. httpx is
 # usually already present; fastapi + uvicorn power the Anthropic-compatible
-# proxy server (scripts/claude_oauth/bridge.py + __main__.py).
+# proxy servers.  For a full harness install prefer `uv sync` at the harness
+# root against pyproject.toml + uv.lock; this script is the pip fallback for
+# environments where uv is not available.
 set -eux
 
 PYTHON="${PYTHON:-python3}"

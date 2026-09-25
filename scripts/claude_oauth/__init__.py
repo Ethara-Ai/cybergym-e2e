@@ -13,6 +13,7 @@ See ``benchmarks/goku/CLAUDE_CODE_BACKEND.md`` for setup, ToS caveats, and
 integration with goku's ``--agent-backend claudecode`` path.
 """
 
+from . import rotation_state
 from .credentials import (
     CredentialProvider,
     CredentialsError,
@@ -44,4 +45,5 @@ __all__ = [
     "load_account_pool",
     "load_credentials",
     "refresh_credentials",
+    "rotation_state",
 ]

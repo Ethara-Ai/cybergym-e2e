@@ -16,9 +16,9 @@ Verified live 2026-07-03 (Pro account): with the access token + account id from
 ``~/.codex/auth.json`` and the headers below, ``gpt-5.5`` returns a 200 Responses
 SSE stream (``response.created`` … ``response.completed``).
 
-Required upstream headers (all verified):
+Upstream headers (all verified):
     Authorization:      Bearer <access_token>
-    ChatGPT-Account-Id: <account_id>
+    ChatGPT-Account-Id: <account_id>       (only when Codex stored one)
     OpenAI-Beta:        responses=experimental
     originator:         codex_cli_rs
     session_id:         <uuid>            (per request)
@@ -42,6 +42,7 @@ import hmac
 import json
 import logging
 import os
+import time
 import re
 import uuid
 from typing import Any, AsyncIterator, Optional
@@ -173,10 +174,19 @@ def _secret_eq(candidate: str, secret: str) -> bool:
     return bool(candidate) and hmac.compare_digest(candidate, secret)
 
 
+def _unauthenticated_allowed() -> bool:
+    # Explicit opt-in only. Without the secret AND without this flag, the bridge
+    # refuses every request so a bystander process on the same host cannot spend
+    # the linked ChatGPT quota.
+    return os.environ.get("KAKASHI_CODEX_BRIDGE_ALLOW_UNAUTHENTICATED", "").strip() == "1"
+
+
 def _client_authorized(request: Request) -> bool:
     secret = _bridge_secret()
     if not secret:
-        return True  # unauthenticated mode (logged as a warning at startup)
+        # Fail closed unless the operator explicitly opted in to the legacy
+        # unauthenticated mode; the startup warning names the flag.
+        return _unauthenticated_allowed()
     # Accept the secret via Bearer Authorization or the OpenAI x-api-key header.
     auth = request.headers.get("authorization", "")
     if auth.lower().startswith("bearer ") and _secret_eq(auth[7:].strip(), secret):
@@ -270,6 +280,19 @@ def _prepare_body(raw: bytes) -> tuple[bytes, bool]:
     return json.dumps(body).encode(), client_wanted_stream
 
 
+def _dump_sse(raw_sse: bytes) -> None:
+    """Write the raw upstream stream to GOKU_CODEX_DUMP_SSE_DIR (debug aid)."""
+    d = os.environ.get("GOKU_CODEX_DUMP_SSE_DIR", "").strip()
+    if not d:
+        return
+    try:
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, f"sse-{int(time.time() * 1000)}.txt"), "wb") as fh:
+            fh.write(raw_sse)
+    except OSError:
+        pass
+
+
 def _aggregate_sse(raw_sse: bytes) -> tuple[Optional[dict], Optional[str]]:
     """Collapse a Responses-API SSE stream into the final response object.
 
@@ -308,12 +331,19 @@ def _aggregate_sse(raw_sse: bytes) -> tuple[Optional[dict], Optional[str]]:
     return final, err
 
 
-def _forward_headers(request: Request, token: str, account_id: str) -> dict[str, str]:
+def _forward_headers(
+    request: Request,
+    token: str,
+    account_id: Optional[str],
+) -> dict[str, str]:
     headers = {
         k: v for k, v in request.headers.items() if k.lower() not in _STRIP_REQUEST_HEADERS
     }
     headers["Authorization"] = f"Bearer {token}"
-    headers["ChatGPT-Account-Id"] = account_id
+    # Match the current Codex client: account_id is optional in auth.json and
+    # the header is omitted when no account/workspace was selected explicitly.
+    if account_id:
+        headers["ChatGPT-Account-Id"] = account_id
     headers["OpenAI-Beta"] = OAUTH_BETA
     headers["originator"] = ORIGINATOR
     headers["session_id"] = str(uuid.uuid4())
@@ -345,18 +375,28 @@ def build_app(provider=None) -> FastAPI:
     client = httpx.AsyncClient(timeout=httpx.Timeout(connect=15.0, read=1800.0, write=60.0, pool=15.0))
 
     if not _bridge_secret():
-        _LOG.warning(
-            "KAKASHI_CODEX_BRIDGE_SECRET is not set — the bridge is UNAUTHENTICATED; "
-            "any local process can spend this subscription. Set it (and point "
-            "clients' OPENAI_API_KEY at the same value) to lock it down."
-        )
+        if _unauthenticated_allowed():
+            _LOG.warning(
+                "KAKASHI_CODEX_BRIDGE_SECRET is not set and "
+                "KAKASHI_CODEX_BRIDGE_ALLOW_UNAUTHENTICATED=1 opted in — any local "
+                "process can spend this subscription. Prefer setting the secret."
+            )
+        else:
+            _LOG.warning(
+                "KAKASHI_CODEX_BRIDGE_SECRET is not set — the bridge will refuse "
+                "every request. Set KAKASHI_CODEX_BRIDGE_SECRET (and point "
+                "clients' OPENAI_API_KEY at the same value), or set "
+                "KAKASHI_CODEX_BRIDGE_ALLOW_UNAUTHENTICATED=1 to restore the "
+                "legacy unauthenticated behaviour."
+            )
 
     @app.get("/healthz")
     async def healthz() -> JSONResponse:  # noqa: D401
         try:
             token = provider.get_access_token()
+            account = provider.account_id
             return JSONResponse({"ok": True, "token_prefix": token[:12] + "...",
-                                 "account_prefix": provider.account_id[:8] + "..."})
+                                 "account_prefix": account[:8] + "..." if account else None})
         except CredentialsError as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=503)
 
@@ -364,8 +404,9 @@ def build_app(provider=None) -> FastAPI:
     async def quota() -> JSONResponse:  # noqa: D401
         if isinstance(provider, MultiAccountCredentialProvider):
             return JSONResponse({"multi_account": True, **provider.status()})
+        account = provider.account_id
         return JSONResponse({"multi_account": False,
-                             "account_prefix": provider.account_id[:8] + "..."})
+                             "account_prefix": account[:8] + "..." if account else None})
 
     def _auth_or_401(request: Request):
         if not _client_authorized(request):
@@ -378,7 +419,12 @@ def build_app(provider=None) -> FastAPI:
             return JSONResponse({"error": {"message": f"bridge: {e}", "type": "credentials_error"}},
                                 status_code=503)
 
-    async def _open_upstream(request: Request, body: bytes, token: str, account: str):
+    async def _open_upstream(
+        request: Request,
+        body: bytes,
+        token: str,
+        account: Optional[str],
+    ):
         """POST the prepared body to the codex backend; return (upstream, None) or
         (None, error_Response)."""
         headers = _forward_headers(request, token, account)
@@ -480,10 +526,31 @@ def build_app(provider=None) -> FastAPI:
 
         raw_sse = await upstream.aread()
         await upstream.aclose()
+        _dump_sse(raw_sse)
         final, err = _aggregate_sse(raw_sse)
         if final is None:
             msg = err or "bridge: upstream stream produced no response.completed event"
             return JSONResponse({"error": {"message": msg, "type": "upstream_error"}}, status_code=502)
+        # A terminal response.failed / response.incomplete (context limit, content
+        # filter, reasoning budget) carries a response object with no output.
+        # Say so: an empty 200 reads to the client as "the model said nothing",
+        # which the rubric judge then counts as a wasted trial.
+        status = final.get("status")
+        if err or status in ("failed", "incomplete", "cancelled"):
+            error = final.get("error") if isinstance(final.get("error"), dict) else {}
+            detail = final.get("incomplete_details") or error or {"status": status}
+            code = str(error.get("code") or (final.get("incomplete_details") or {}).get("reason") or "")
+            # A policy refusal or an invalid request is deterministic: hand it
+            # back as a 4xx so a retrying client (the rubric judge) stops at
+            # once instead of re-sending the same prompt four times.
+            http_status = 422 if code in ("cyber_policy", "content_policy", "invalid_request",
+                                          "context_length_exceeded", "max_output_tokens") \
+                else 502
+            return JSONResponse({"error": {"message": f"bridge: upstream response {status or 'failed'}"
+                                                      f"{' (' + code + ')' if code else ''}: "
+                                                      f"{error.get('message') or json.dumps(detail)}",
+                                           "type": "upstream_error", "code": code or None,
+                                           "status": status}}, status_code=http_status)
         return JSONResponse(_xlate.responses_to_chat(final, model, created), status_code=200)
 
     # Responses API (native path — preferred when the client uses responses mode).

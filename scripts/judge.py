@@ -62,20 +62,24 @@ def resolve_inputs(args, rh):
                     traj = run_dir / candidate
                     break
         if task_dir is None:
-            summary = run_dir / "summary.json"
-            if summary.is_file():
+            summary = {}
+            sfile = run_dir / "summary.json"
+            if sfile.is_file():
                 try:
-                    name = json.loads(summary.read_text()).get("task")
-                    if name and (REPO_ROOT / "tasks" / name).is_dir():
-                        task_dir = REPO_ROOT / "tasks" / name
+                    summary = json.loads(sfile.read_text())
                 except (OSError, json.JSONDecodeError):
-                    pass
-            if task_dir is None:
-                # agent_output/<task>/<model>/<timestamp>/ (or the older
-                # agent_output/<task>/<timestamp>/): an ancestor names the task.
-                for anc in (run_dir.parent, run_dir.parent.parent):
-                    guess = REPO_ROOT / "tasks" / anc.name
-                    if guess.is_dir():
+                    summary = {}
+            recorded = summary.get("harbor_task")
+            if recorded and (Path(recorded) / "tests" / "rubric.json").is_file():
+                task_dir = Path(recorded)
+            names = [n for n in (summary.get("task"), run_dir.parent.name,
+                                 run_dir.parent.parent.name) if n]
+            for name in names:
+                if task_dir is not None:
+                    break
+                for base in ("tasks", "input"):
+                    guess = REPO_ROOT / base / name
+                    if (guess / "tests").is_dir():
                         task_dir = guess
                         break
 
@@ -136,6 +140,8 @@ def main():
     print(f"\nrubric_score = {rubric_data['rubric_score']:.6f} "
           f"({rubric_data['earned']}/{rubric_data['total_positive']})")
     print(f"judged by:    {rubric_data.get('judge_provider')}:{rubric_data.get('judge_model')}")
+    print(f"prompt:       v{rubric_data.get('judge_prompt_version', 1)}, grading rule "
+          f"{'included' if rubric_data.get('grading_rule') else 'none'}")
     if rubric_data.get("judge_anomalies"):
         print(f"judge anomalies: {rubric_data['judge_anomalies']}")
     print(f"judge cost:   ${rubric_data.get('judge_usage', {}).get('cost_usd', 0.0):.4f}")

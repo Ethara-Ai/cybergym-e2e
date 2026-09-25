@@ -1,0 +1,50 @@
+# Dependency declarations for the kakashi harness extension.
+#
+# trinity/FORGE.md:184 requires "every dependency pinned at an immutable
+# revision". This file declares WHAT the harness needs; running
+#
+#     uv lock
+#
+# from this directory freezes those declarations into uv.lock, which is the
+# artifact the contract counts as the immutable pin. Without uv.lock this
+# file alone leaves the pinning obligation as a named coverage gap capped at
+# HOLD:PILOT_REQUIRED with reason "dependency-pins-not-immutable".
+#
+# The runner is not currently structured as an installable package; do not
+# `pip install -e .` from this file. It exists to give `uv lock` a resolvable
+# input and to make the pinning intent machine-readable.
+
+[project]
+name = "kakashi-harness"
+version = "0.1.0"
+description = "Trinity benchmark extension for the kakashi Code Security lane; an external runner uses it to run inference and evaluation over resident bundles under samples/ and delivery/."
+requires-python = ">=3.12"
+readme = "README.md"
+license = { file = "LICENSE" }
+
+# Direct dependencies used by run_harbor.py, generate_report.py,
+# scripts/judge_lib.py, scripts/harbor_runner.py, and the vendored bridges
+# under scripts/claude_oauth, scripts/codex_oauth, and scripts/zbridge.
+#
+# `harbor` is the trial runner (`harbor run`, see scripts/harbor_runner.py).
+# Its pin is EXACT and must equal `harbor_release` in harbor.lock: the runner
+# refuses to start when the installed release and the lock disagree, so the
+# two are re-pinned together whenever the currency gate fires.
+dependencies = [
+  "anthropic>=0.42.0",
+  "boto3>=1.35.0",
+  "docker>=7.1.0",
+  "fastapi>=0.115.0",
+  "harbor==0.23.0",
+  "httpx>=0.28.0",
+  "huggingface_hub>=0.27.0",
+  "openai>=1.58.0",
+  "tomli>=2.2.0",
+  "tomli-w>=1.1.0",
+  "uvicorn>=0.34.0",
+]
+
+[tool.uv]
+# Lock deterministically with `uv lock` from the harness root; the resulting
+# uv.lock is what trinity/FORGE.md:184 counts as an immutable pin.
+package = false

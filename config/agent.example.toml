@@ -1,0 +1,60 @@
+# Externalized agent configuration example.
+#
+# trinity/FORGE.md:184 requires the agent under test "behind a vendored
+# interface pinned at an exact revision with model configuration externalized".
+# This file is the externalization surface. When wired into run_harbor.py, a
+# run passes:
+#
+#     python run_harbor.py <task_dir> --agent-config config/agent.toml
+#
+# and the runner reads model choice, provider, adapter revision, and knobs
+# from here rather than from CLI flags. Until the runner reads this file,
+# it is a template documenting the intended structure.
+#
+# Copy to config/agent.toml (gitignored) and edit for a specific run.
+
+[agent]
+# Trial orchestration: harbor (default; `harbor run` under the release pinned
+# in harbor.lock) or legacy (raw docker, Claude Code only).
+runner = "harbor"
+
+# Agent under test: openhands-sdk (default under harbor), claude-code, or the
+# self-checks oracle / nop.  The agent's own pin lives in run_harbor.py
+# (OPENHANDS_SDK_VERSION / CLAUDE_CODE_VERSION) and is baked into the per-task
+# agent image.
+name = "openhands-sdk"
+
+# Reasoning effort the OpenHands SDK asks of the model (none|low|medium|high|
+# xhigh|max|default).  Ignored by claude-code.
+reasoning_effort = "high"
+
+# One of: anthropic, bedrock, glm.  (bedrock: --runner legacy only.)
+model_provider = "anthropic"
+
+# Vendored interface revision. Pin to a concrete revision of the agent CLI
+# (Claude Code, OpenHands SDK, etc.) rather than "whatever is installed at
+# runtime". A TBD is a coverage gap.
+interface_revision = "TBD"
+
+# Model identifier the provider sees.
+model_id = "claude-opus-5"
+
+# Optional small-model identifier for the CLI's haiku-tier calls.
+small_model_id = ""
+
+[budgets]
+timeout_seconds = 5400
+max_attempts = 1
+
+[isolation]
+# Never disable in a real run. `lockdown = false` marks the run untrusted.
+lockdown = true
+shared_network = false
+
+[judge]
+# Judge configuration is not agent configuration; kept here so every knob
+# lives in one file for now. A future refactor separates them.
+provider = "codex"
+model = "gpt-5.6-sol"
+calibration_model = "gpt-5.6-luna"
+trials = 3

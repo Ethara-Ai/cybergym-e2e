@@ -68,8 +68,8 @@ def _target_missing(result):
 
 def _cp(src, dst, cwd=None):
     """sudo cp with the failure surfaced instead of swallowed."""
-    r = subprocess.run(f"sudo cp {src} {dst}", shell=True, cwd=cwd, capture_output=True,
-                       encoding='utf-8', errors='replace')
+    r = subprocess.run(["sudo", "cp", str(src), str(dst)], shell=False, cwd=cwd,
+                       capture_output=True, encoding='utf-8', errors='replace')
     if r.returncode != 0:
         raise Exception(f"Failed to copy {src} -> {dst}: {r.stderr[-300:]}")
 
@@ -81,15 +81,21 @@ def apply_patch(repo_path, patch_file, verbose=True):
 
     Returns the label of the applier that worked, or raises an exception.
     """
-    attempts = [("git apply", f"sudo git apply {patch_file}")]
-    attempts += [(f"patch -p{n}", f"sudo patch --batch --forward -p{n} < {patch_file}")
-                 for n in (1, 0, 2, 3)]
+    attempts = [("git apply", ["sudo", "git", "apply", str(patch_file)], False)]
+    attempts += [(f"patch -p{n}",
+                  ["sudo", "patch", "--batch", "--forward", f"-p{n}"],
+                  True) for n in (1, 0, 2, 3)]
     result = None
-    for label, cmd in attempts:
+    for label, argv, stdin_from_patch in attempts:
         if verbose:
             print(f"  Applying patch ({label})")
-        result = subprocess.run(cmd, shell=True, cwd=repo_path, capture_output=True,
-                                encoding='utf-8', errors='replace')
+        if stdin_from_patch:
+            with open(patch_file, "rb") as _pf:
+                result = subprocess.run(argv, shell=False, cwd=repo_path, stdin=_pf,
+                                        capture_output=True, encoding='utf-8', errors='replace')
+        else:
+            result = subprocess.run(argv, shell=False, cwd=repo_path,
+                                    capture_output=True, encoding='utf-8', errors='replace')
         if result.returncode == 0:
             return label
         # No git reset between attempts: a snapshot with a .git dir may hold the
@@ -131,12 +137,19 @@ def restore_src(src_dir, verbose=True):
         if verbose:
             print("  restore_src: changed cwd to / before restore")
 
-    result = subprocess.run(
-        f"sudo rm -rf {src_dir} && sudo cp -a {backup_path} {src_dir}",
-        shell=True, capture_output=True, encoding='utf-8', errors='replace'
+    rm = subprocess.run(
+        ["sudo", "rm", "-rf", str(src_dir)],
+        shell=False, capture_output=True, encoding='utf-8', errors='replace'
     )
-    if result.returncode != 0:
-        raise Exception(f"Failed to restore source: {result.stderr[-500:]}")
+    if rm.returncode != 0:
+        raise Exception(f"Failed to restore source (rm): {rm.stderr[-500:]}")
+    cp = subprocess.run(
+        ["sudo", "cp", "-a", str(backup_path), str(src_dir)],
+        shell=False, capture_output=True, encoding='utf-8', errors='replace'
+    )
+    if cp.returncode != 0:
+        raise Exception(f"Failed to restore source (cp): {cp.stderr[-500:]}")
+    result = cp
 
     # Recover cwd after restore.
     recovered_to = None
@@ -225,14 +238,14 @@ def validate_task(
         # Run prepare.sh once if needed
         if run_prepare:
             log("  Running prepare.sh")
-            result = subprocess.run("sudo -E bash -eux /src/prepare.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1800)
+            result = subprocess.run(["sudo", "-E", "bash", "-eux", "/src/prepare.sh"], shell=False, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1800)
             if result.returncode != 0:
                 raise Exception(f"Failed to run prepare.sh: {result.stderr[-500:]}")
 
         # Backup entire source tree after prepare (pristine state)
         if not Path("/src_backup").exists():
             log("  Backing up source tree")
-            result = subprocess.run("sudo cp -a /src /src_backup", shell=True, capture_output=True, encoding='utf-8', errors='replace')
+            result = subprocess.run(["sudo", "cp", "-a", "/src", "/src_backup"], shell=False, capture_output=True, encoding='utf-8', errors='replace')
             if result.returncode != 0:
                 raise Exception(f"Failed to backup source: {result.stderr[-500:]}")
 
@@ -246,12 +259,12 @@ def validate_task(
                 _cp(poc_path, src_dir / 'poc.bin', src_dir)
 
                 log("  Compiling")
-                result = subprocess.run("sudo -E bash -eux /src/compile.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=3600)
+                result = subprocess.run(["sudo", "-E", "bash", "-eux", "/src/compile.sh"], shell=False, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=3600)
                 if result.returncode != 0:
                     raise Exception(f"Compile failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
 
                 log("  Running agent PoC")
-                result = subprocess.run("sudo -E bash -ux /src/run_poc.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
+                result = subprocess.run(["sudo", "-E", "bash", "-ux", "/src/run_poc.sh"], shell=False, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
                 poc_output = f"Exit code: {result.returncode}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
 
                 if not _sanitizer_report(result) or _target_missing(result):
@@ -289,12 +302,12 @@ def validate_task(
                     _cp(poc_path, src_dir / 'poc.bin', src_dir)
 
                     log("  Compiling")
-                    result = subprocess.run("sudo -E bash -eux /src/compile.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=3600)
+                    result = subprocess.run(["sudo", "-E", "bash", "-eux", "/src/compile.sh"], shell=False, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=3600)
                     if result.returncode != 0:
                         raise Exception(f"Compile failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
 
                     log("  Running agent PoC")
-                    result = subprocess.run("sudo -E bash -ux /src/run_poc.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
+                    result = subprocess.run(["sudo", "-E", "bash", "-ux", "/src/run_poc.sh"], shell=False, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
                     if _sanitizer_report(result) or _target_missing(result):
                         log("  FAILED: Agent PoC still crashes with patch (or the target did not run)")
                         log(f"  STDERR:\n{result.stderr}")
@@ -326,12 +339,12 @@ def validate_task(
                     apply_patch(repo_path, patch_path, verbose)
 
                     log("  Compiling")
-                    result = subprocess.run("sudo -E bash -eux /src/compile.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=3600)
+                    result = subprocess.run(["sudo", "-E", "bash", "-eux", "/src/compile.sh"], shell=False, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=3600)
                     if result.returncode != 0:
                         raise Exception(f"Compile failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
 
                     log("  Running tests")
-                    result = subprocess.run("sudo -E bash -eux /src/test.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1800)
+                    result = subprocess.run(["sudo", "-E", "bash", "-eux", "/src/test.sh"], shell=False, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1800)
                     if result.returncode != 0:
                         log("  FAILED: Tests failed")
                         log(f"  STDOUT:\n{result.stdout}")
@@ -364,7 +377,7 @@ def validate_task(
                     apply_patch(repo_path, patch_path, verbose)
 
                     log("  Compiling")
-                    result = subprocess.run("sudo -E bash -eux /src/compile.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=3600)
+                    result = subprocess.run(["sudo", "-E", "bash", "-eux", "/src/compile.sh"], shell=False, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=3600)
                     if result.returncode != 0:
                         raise Exception(f"Compile failed:\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}")
 
@@ -372,7 +385,7 @@ def validate_task(
                     _cp(gt_poc_path, src_dir / 'poc.bin', src_dir)
 
                     log("  Running ground truth PoC")
-                    result = subprocess.run("sudo -E bash -ux /src/run_poc.sh", shell=True, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
+                    result = subprocess.run(["sudo", "-E", "bash", "-ux", "/src/run_poc.sh"], shell=False, cwd=src_dir, capture_output=True, encoding='utf-8', errors='replace', timeout=1200)
                     if _sanitizer_report(result) or _target_missing(result):
                         log("  FAILED: Ground truth PoC still crashes (or the target did not run)")
                         log(f"  STDERR:\n{result.stderr}")

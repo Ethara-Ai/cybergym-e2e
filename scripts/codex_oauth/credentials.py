@@ -10,13 +10,13 @@ OAuth credentials at ``~/.codex/auth.json``:
         "id_token":     "<jwt>",
         "access_token": "<jwt>",   # sent as Bearer to the codex backend
         "refresh_token": "rt.1...",
-        "account_id":   "<uuid>"   # sent as the ChatGPT-Account-Id header
+        "account_id":   "<uuid-or-null>"
       },
       "last_refresh": "<iso8601>"
     }
 
-The access token is a short-lived JWT (~10 days). This module loads it, exposes
-the account id, decodes the expiry, and refreshes against
+The access token is a short-lived JWT. This module loads it, exposes the optional
+account id, decodes the expiry, and refreshes against
 ``https://auth.openai.com/oauth/token`` using the stored refresh token and the
 codex CLI's public OAuth client id when the token is near expiry.
 
@@ -65,7 +65,9 @@ class CodexCredentials:
     """A loaded ChatGPT-auth credential set."""
 
     access_token: str
-    account_id: str
+    # Newer Codex builds can persist null here. The official client then omits
+    # ChatGPT-Account-Id and lets the bearer token identify the account.
+    account_id: Optional[str]
     refresh_token: Optional[str] = None
     expires_at: Optional[float] = None  # unix seconds, from the JWT `exp`
 
@@ -120,9 +122,9 @@ def _parse_auth_json(raw: str, source: str) -> CodexCredentials:
     tokens = data.get("tokens") or {}
     access = tokens.get("access_token")
     account = tokens.get("account_id")
-    if not access or not account:
+    if not access:
         raise CredentialsError(
-            f"auth.json at {source} is missing tokens.access_token/account_id. "
+            f"auth.json at {source} is missing tokens.access_token. "
             "Re-authenticate with `codex login`."
         )
     return CodexCredentials(
@@ -217,11 +219,11 @@ class CredentialProvider:
         return str(default) if default.is_file() else None
 
     @property
-    def account_id(self) -> str:
+    def account_id(self) -> Optional[str]:
         with self._lock:
             return self._creds.account_id
 
-    def get_token_and_account(self) -> tuple[str, str]:
+    def get_token_and_account(self) -> tuple[str, Optional[str]]:
         """Return (token, account_id) for this single account. Uniform with the
         multi-account provider so the bridge can treat both identically."""
         return self.get_access_token(), self.account_id
@@ -271,11 +273,6 @@ class CredentialProvider:
             data["last_refresh"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             tmp = p.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(data, indent=2))
-            # auth.json holds the refresh token: keep it private (0600). The temp
-            # inherits the umask (often 0644) and os.replace preserves the temp's
-            # mode, so set it explicitly before the rename or the token file is
-            # downgraded to world-readable on the first refresh.
-            os.chmod(tmp, 0o600)
             os.replace(tmp, p)
         except Exception as e:  # noqa: BLE001 — persistence is best-effort
             _LOG.debug("token write-back skipped: %s", e)
@@ -355,7 +352,7 @@ class MultiAccountCredentialProvider:
         # get_access_token does its own (per-provider) refresh + locking.
         return self._providers[i].get_access_token()
 
-    def get_token_and_account(self) -> tuple[str, str]:
+    def get_token_and_account(self) -> tuple[str, Optional[str]]:
         """Return (token, account_id) from the SAME slot, atomically.
 
         Callers must use this rather than get_access_token()+account_id
@@ -368,7 +365,7 @@ class MultiAccountCredentialProvider:
         return provider.get_access_token(), provider.account_id
 
     @property
-    def account_id(self) -> str:
+    def account_id(self) -> Optional[str]:
         with self._lock:
             i = self._idx
         return self._providers[i].account_id
@@ -388,7 +385,8 @@ class MultiAccountCredentialProvider:
             return {
                 "active": self._idx,
                 "accounts": [
-                    {"account_prefix": p.account_id[:8] + "...",
+                    {"account_prefix": ((p.account_id[:8] + "...")
+                                        if p.account_id else None),
                      "cooldown_remaining": max(0, round(self._cooldown_until[i] - now, 1))}
                     for i, p in enumerate(self._providers)
                 ],

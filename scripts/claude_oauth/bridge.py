@@ -31,6 +31,7 @@ import asyncio
 import json
 import logging
 import os
+import tempfile
 import time
 from typing import TYPE_CHECKING, Any, Iterable, Optional, Tuple, Union
 
@@ -39,6 +40,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from .stream_tee import StreamTee
+from . import rotation_state
 from .credentials import (
     CredentialProvider,
     CredentialsError,
@@ -617,6 +619,54 @@ def _apply_classification_to_provider(
                 provider.force_reload()
 
 
+def _apply_success_to_provider(provider: ProviderLike, token_used: str) -> None:
+    """Record a 2xx so a recovered account stops looking like a failing one.
+
+    Counterpart to _apply_classification_to_provider. Cheap by design: the
+    shared-state write is skipped entirely when there is no streak to clear.
+    """
+    if isinstance(provider, MultiAccountCredentialProvider):
+        try:
+            provider.mark_account_success(token_used)
+        except Exception:  # noqa: BLE001 - never let bookkeeping break a response
+            pass
+
+
+def _rotated_token_retry(
+    provider: ProviderLike,
+    classified: ClassifiedError,
+    access_token: str,
+    tried: set[str],
+    attempt: int,
+    max_retries: int,
+) -> bool:
+    """Whether to re-issue the request once with a freshly loaded token.
+
+    A single-account 401 ``oauth_token_invalid`` mid-run almost always means
+    another consumer of the same login (the ``claude`` CLI on this machine,
+    a second bridge) refreshed the OAuth pair: Anthropic rotates on refresh
+    and revokes the previous access token, and the rotated successor is
+    already in the Keychain / refresh cache.  ``_apply_classification_to_provider``
+    has just ``force_reload``-ed, so the next ``get_access_token`` returns that
+    successor; retrying is transparent to the client.  Clients built on
+    LiteLLM (the OpenHands SDK) treat a 401 as fatal and abort the whole run,
+    so the bridge must absorb it.  The burned-token guard at the top of each
+    loop stops the retry when no rotated token exists.
+    """
+    if classified.kind != ErrorKind.OAUTH_TOKEN_INVALID:
+        return False
+    if isinstance(provider, MultiAccountCredentialProvider):
+        return False  # failover handles it
+    if attempt >= max(1, max_retries):
+        return False
+    tried.add(access_token)
+    _LOG.warning(
+        "upstream 401 oauth_token_invalid on the single account; reloading the "
+        "credential store and retrying once with the rotated token"
+    )
+    return True
+
+
 def _build_error_response(
     classified: ClassifiedError, upstream_headers: Any = None
 ) -> JSONResponse:
@@ -753,11 +803,12 @@ async def _forward_non_streaming(
                             "RESP_DIAG status=%d stop=%s blocks=%s text_len=%d out_bytes=%d",
                             upstream.status_code, _rj.get("stop_reason"), _blocks, _txtlen, len(_out),
                         )
-                        _dd = os.environ.get("WCB_CC_BODY_DUMP_DIR", "/tmp")
+                        _dd = os.environ.get("WCB_CC_BODY_DUMP_DIR") or tempfile.gettempdir()
                         with open(f"{_dd}/wcb_resp_{int(time.time()*1000)}.json", "wb") as _rf:
                             _rf.write(_out)
                 except Exception as _re:  # noqa: BLE001
                     _LOG.warning("RESP_DIAG failed: %s", _re)
+            _apply_success_to_provider(provider, access_token)
             return Response(
                 content=_out,
                 status_code=upstream.status_code,
@@ -776,6 +827,12 @@ async def _forward_non_streaming(
             classified.request_id,
         )
         _apply_classification_to_provider(provider, access_token, classified)
+
+        # Rotated-token retry: another consumer refreshed the login; re-read it.
+        if _rotated_token_retry(provider, classified, access_token, _tried_tokens,
+                                attempt, max_retries):
+            attempt += 1
+            continue
 
         # Failover path: account problem + multi-account pool has another slot.
         if classified.kind.is_account_problem and isinstance(
@@ -963,6 +1020,7 @@ async def _stream_with_failover(
                 for k, v in upstream.headers.items()
                 if k.lower() not in STRIP_HEADERS_OUT
             }
+            _apply_success_to_provider(provider, access_token)
             return StreamingResponse(
                 event_stream(),
                 status_code=upstream.status_code,
@@ -991,6 +1049,12 @@ async def _stream_with_failover(
             upstream.status_code, classified.kind.value, classified.retry_after_seconds,
         )
         _apply_classification_to_provider(provider, access_token, classified)
+
+        # Rotated-token retry: another consumer refreshed the login; re-read it.
+        if _rotated_token_retry(provider, classified, access_token, _tried_tokens,
+                                attempt, max_retries):
+            attempt += 1
+            continue
 
         if classified.kind.is_account_problem and isinstance(
             provider, MultiAccountCredentialProvider
@@ -1093,6 +1157,10 @@ async def _stream_buffered_with_retry(
                                 break
                         classified = classify_anthropic_error(upstream.status_code, body, upstream.headers)
                         _apply_classification_to_provider(provider, access_token, classified)
+                        if _rotated_token_retry(provider, classified, access_token, tried_tokens,
+                                                attempt, max_retries):
+                            attempt += 1
+                            continue
                         if classified.kind.is_account_problem and isinstance(provider, MultiAccountCredentialProvider):
                             tried_tokens.add(access_token)
                             if provider.next_reset_at() is None and attempt < max_retries:
@@ -1124,6 +1192,7 @@ async def _stream_buffered_with_retry(
                             provider.last_cap_reset_at = None  # type: ignore[attr-defined]
                     except Exception:  # noqa: BLE001
                         pass
+                    _apply_success_to_provider(provider, access_token)
                     tee.attempt_started()
                     _settle("stream", upstream.status_code, upstream.headers)
                     async for chunk in upstream.aiter_bytes():
@@ -1343,6 +1412,10 @@ def build_app(provider: ProviderLike | None = None) -> FastAPI:
                 "multi_account": True,
                 "accounts": snap,
                 "next_reset_at_unix": prov.next_reset_at(),
+                # Cooldowns are shared across every bridge process on this host
+                # (batch_run.sh runs up to MAX_PARALLEL of them); name the file
+                # so an operator can inspect or clear it.
+                "rotation_state_path": str(rotation_state.state_path()),
             }
         # B5: surface the most recent observed cap reset for the single account
         # so recovery can wait the real duration instead of a 300s fallback.
@@ -1412,12 +1485,9 @@ def build_app(provider: ProviderLike | None = None) -> FastAPI:
                     )
                     _LOG.warning("REQ_BODY_HEADERS %s", dict(request.headers))
                     try:
-                        _dump_dir = os.environ.get("WCB_CC_BODY_DUMP_DIR", "/tmp")
+                        _dump_dir = os.environ.get("WCB_CC_BODY_DUMP_DIR") or tempfile.gettempdir()
                         _dump_path = f"{_dump_dir}/wcb_bridge_last_body_{int(time.time())}.json"
-                        # The body carries the prompt and the stub secret header;
-                        # create the dump 0600 so it is not world-readable in /tmp.
-                        _fd = os.open(_dump_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-                        with os.fdopen(_fd, "wb") as _f:
+                        with open(_dump_path, "wb") as _f:
                             _f.write(raw_body)
                         _LOG.warning("REQ_BODY_DUMP wrote %d bytes to %s", len(raw_body), _dump_path)
                     except Exception as _e2:  # noqa: BLE001

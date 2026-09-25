@@ -363,6 +363,11 @@ def map_usage(
     if has_cached:
         usage["cache_read_input_tokens"] = cached
         usage["cache_creation_input_tokens"] = creation
+    # z.ai counts reasoning inside completion_tokens and reports the split in
+    # completion_tokens_details; Anthropic clients read it from output_tokens_details.
+    ctd = usage_in.get("completion_tokens_details")
+    if isinstance(ctd, dict) and ctd.get("reasoning_tokens") is not None:
+        usage["output_tokens_details"] = {"thinking_tokens": _nonneg_int(ctd["reasoning_tokens"])}
     return usage
 
 

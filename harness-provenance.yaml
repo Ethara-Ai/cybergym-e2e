@@ -1,0 +1,46 @@
+# Upstream provenance for the harness itself.
+#
+# trinity/FORGE.md 9a requires an upstream_provenance record for tasks; the
+# harness extension is a derivative work of CyberGym-E2E and records its
+# provenance here for symmetry, so downstream readers can verify which bytes
+# are inherited and which are Trinity-authored.
+
+origin: derived
+
+upstream:
+  identity: sunblaze-ucb/cybergym-e2e
+  host: github.com
+  url: https://github.com/sunblaze-ucb/cybergym-e2e
+  license: Apache-2.0
+  paper:
+    title: "CyberGym-E2E: Scalable Real-World Benchmark for AI Agents' End-to-End Cybersecurity Capabilities"
+    arxiv_id: "2606.04460"
+    year: 2026
+  dataset_reference: https://huggingface.co/datasets/sunblaze-ucb/cybergym-e2e
+
+# Modifications this Kakashi harness makes over upstream CyberGym-E2E.
+modifications:
+  - Vendored Claude Code OAuth bridge (scripts/claude_oauth) for Max/Pro subscription routing
+  - Vendored Codex OAuth bridge (scripts/codex_oauth) for ChatGPT-account judge access
+  - Vendored zbridge (scripts/zbridge) for Z.ai Coding Plan (GLM) routing with reasoning-token preservation
+  - ATIF-v1.7 trajectory format in scripts/trajectory.py
+  - Codex-only rubric judge with 3-trial lower-median, calibration retries, and anomaly capture (scripts/judge.py, scripts/judge_lib.py)
+  - Pass-at-k support with client deliverables export (scripts/deliverables.py)
+  - Odoo Finance API usage tracking (scripts/finance_client.py)
+  - Harbor (the release pinned in harbor.lock) as the trial runner via `harbor run` (scripts/harbor_runner.py); the raw-docker orchestration is retained as `--runner legacy`
+  - Rubric judge sandboxed in a third container (scripts/judge_container.py): pinned python:3.12-slim, tests/ + trajectory only, internal network with a one-port relay to the judge endpoint; the codex bridge now reports upstream refusals (e.g. cyber_policy) as errors instead of empty replies and retries once on a rotated OAuth token
+  - OpenHands (agent SDK, pinned) as the default agent under the Harbor runner, through a vendored copy of Harbor's openhands-sdk agent and in-container runner (scripts/harbor_agents/, from kanao-harness) that records per-step reasoning; Claude Code remains selectable
+  - Trinity scaffolding: pyproject.toml, uv.lock, harbor.lock, Dockerfile, .dockerignore, harness-config.json, harness-provenance.yaml, benchmarks/, config/, scripts/render_readme.py, .githooks/
+
+# Date the modifications were bound to their current state.
+provenance_date: "2026-09-21"
+
+# Trinity-local declaration.
+declared_by: FORGE
+source_kind: public_repository
+license_of_this_harness: Apache-2.0
+
+# Coverage gaps against a fully-populated provenance.
+coverage_gaps:
+  - "ancestry_attestation_digest / ancestry_attestation_signer not bound (FORGE.md 9a.1); signed platform attestation of the fork-ancestry snapshot is not obtained"
+  - "event_attestation_digest / event_attestation_signer not bound; signed attestation of task-generating-event timestamps is not obtained"

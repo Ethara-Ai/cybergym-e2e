@@ -32,7 +32,11 @@ DEFAULT_CONTAINER_HOST = "host.docker.internal"
 # claude / codex bridges): a hand-started zbridge or other z.ai tooling on the
 # machine must not be able to collide with a run that is already going.
 DEFAULT_PORT = 8820
-BIND_ATTEMPTS = 4
+# 4 was enough when only one run was ever in flight; parallel pass@k can put
+# more than that many zbridge children on the same host, and the parent-side
+# port picker (run_harbor._pick_free_port) can still lose the TOCTOU race, so
+# leave real headroom before we surface a hard failure.
+BIND_ATTEMPTS = 32
 STARTUP_TIMEOUT_SEC = 45.0
 # zbridge's standalone defaults (180s non-stream, 600s stream, 30s connect) are
 # raised for the same reason the task budgets are: a GLM-5.3 step at high

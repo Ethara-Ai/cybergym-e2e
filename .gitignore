@@ -13,3 +13,11 @@ jobs/
 .serena/
 raw_data/
 evidence/
+deliverables/
+/tests/
+docs/
+input/
+judge/
+# harness/scripts/touchstone_shim.py output. Every bundle here is a Bucket-N
+# calibration probe per trinity/FORGE.md line 32; never a SHIP artifact.
+derived/

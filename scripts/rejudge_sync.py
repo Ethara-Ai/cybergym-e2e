@@ -37,17 +37,19 @@ def _load(p: Path):
 
 
 def resolve_task_dir(run_dir: Path, summary: dict | None) -> Path | None:
-    """tasks/<name>: from summary.json's `task`, else the run-dir grandparent."""
-    name = (summary or {}).get("task")
-    if name:
-        cand = REPO / "tasks" / name
-        return cand if (cand / "tests").is_dir() else None
-    # agent_output/<task>/<model>/<timestamp>_e2e (or the older
-    # agent_output/<task>/<timestamp>_e2e): an ancestor names the task.
-    for anc in (run_dir.parent, run_dir.parent.parent):
-        cand = REPO / "tasks" / anc.name
-        if (cand / "tests").is_dir():
-            return cand
+    """The task bundle: summary.json's harbor_task while it still exists, else
+    tasks/<name> or input/<name> for the summary's task or an ancestor of the
+    run dir (agent_output/<task>/[<model>/]<timestamp>)."""
+    summary = summary or {}
+    recorded = summary.get("harbor_task")
+    if recorded and (Path(recorded) / "tests").is_dir():
+        return Path(recorded)
+    names = [n for n in (summary.get("task"), run_dir.parent.name, run_dir.parent.parent.name) if n]
+    for name in names:
+        for base in ("tasks", "input"):
+            cand = REPO / base / name
+            if (cand / "tests").is_dir():
+                return cand
     return None
 
 
@@ -173,15 +175,7 @@ def main(argv=None) -> int:
         if s.get("best_reward") is not None:
             s["best_reward"] = avg_score
         s["judge_available"] = judge_available
-        rd = s.get("rubric_detail")
-        if isinstance(rd, dict):
-            rd["rubric_score"] = rubric_score
-            if "criteria" in rubric:
-                rd["criteria"] = rubric["criteria"]
-            if "judge_usage" in rubric:
-                rd["judge_usage"] = rubric["judge_usage"]
-            if "trajectory" in rubric:
-                rd["trajectory"] = rubric["trajectory"]
+        s["rubric_detail"] = rubric          # the whole re-judged verdict, version fields included
         s["judge_provider"] = provider
         s["judge_model"] = model
         sp.write_text(json.dumps(s, indent=2))

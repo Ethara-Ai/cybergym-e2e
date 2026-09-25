@@ -1,12 +1,12 @@
 """Single source of truth for the verifier test-name -> stage mapping.
 
-Both ``run_harbor.py`` (the runner) and ``scripts/qc_harbor.py`` (the QC gate)
-import this table.  Keeping one copy is what guarantees that a task accepted by
-QC is a task the runner can actually map onto ``stage1``..``stage4``; the two
-tables used to be maintained separately and disagreed on every stage.
+``run_harbor.py`` (the runner) imports this table so every task the runner sees
+maps cleanly onto ``stage1``..``stage4``. Historically a sibling QC module kept
+its own copy and the two disagreed on every stage; collapsing to one table
+keeps that class of drift impossible.
 
-Names are matched exactly.  If a task needs a project-specific spelling, add it
-here (and only here) so that both sides see it at once.
+Names are matched exactly. If a task needs a project-specific spelling, add it
+here (and only here).
 """
 
 STAGE_KEYS = ("stage1", "stage2", "stage3", "stage4")

@@ -1,0 +1,120 @@
+{
+  "_notes": [
+    "trinity/FORGE.md:298 requires this closed schema pinning the effective execution configuration before any rollout runs.",
+    "Every field must be resolved before the pilot block can carry a harness_config_digest.",
+    "Mirror these bytes byte-for-byte to <parent-root>/.seed/harness-config.json and record the mirror's lowercase-hex sha256 as harness_config_digest in .seed/pilot.yaml (FORGE-side action, not performed in-harness).",
+    "An unresolved field (a null, an empty list, a TBD string) remains a coverage gap capped at HOLD:SUPPRESSED_MEASUREMENT under private code 'config-unpinned'."
+  ],
+  "schema": "trinity.harness-config/v1",
+  "harness_image_digest": "sha256:13469eaba2a405c0fa51a012df26106eb19246ec5e89a12f6ddfdd12a45df38c",
+  "adapters": {
+    "anthropic": {
+      "kind": "direct_api_and_bridge",
+      "endpoint": "https://api.anthropic.com",
+      "python_client_package": "anthropic",
+      "python_client_pin_source": "uv.lock",
+      "vendored_bridge": {
+        "path": "scripts/claude_oauth",
+        "revision": "cd30fd3394f0b1a3d72e3878653bfda6102570c8",
+        "purpose": "route through Claude Max/Pro OAuth subscription instead of paid API"
+      }
+    },
+    "bedrock": {
+      "kind": "direct_api",
+      "endpoint": "regional AWS Bedrock endpoints resolved by boto3",
+      "python_client_package": "boto3",
+      "python_client_pin_source": "uv.lock",
+      "vendored_bridge": null
+    },
+    "glm": {
+      "kind": "vendored_bridge_to_anthropic_shim",
+      "endpoint_upstream": "https://api.z.ai/api/coding/paas/v4/chat/completions",
+      "python_client_package": null,
+      "python_client_pin_source": "n/a - proxied via zbridge",
+      "vendored_bridge": {
+        "path": "scripts/zbridge",
+        "revision": "e0fbda6848aadf4e02ebf101415607c23806b0dc",
+        "purpose": "translate Anthropic protocol to Z.ai OpenAI-compatible endpoint; preserve reasoning_tokens"
+      }
+    },
+    "codex_judge": {
+      "kind": "vendored_bridge_to_chatgpt_backend",
+      "endpoint_upstream": "https://chatgpt.com/backend-api/codex",
+      "python_client_package": "openai",
+      "python_client_pin_source": "uv.lock",
+      "vendored_bridge": {
+        "path": "scripts/codex_oauth",
+        "revision": "62f325b785a3df602d28ad3baf6a1778ebfe1d7e",
+        "purpose": "route rubric judge through ChatGPT-account subscription rather than API"
+      }
+    }
+  },
+  "model_list": [
+    "claude-opus-5",
+    "claude-sonnet-4-5-20250929",
+    "glm-5.3",
+    "glm-5.3-flash",
+    "gpt-5.6-sol",
+    "gpt-5.6-luna",
+    "gpt-5.6-terra"
+  ],
+  "budgets": {
+    "agent_timeout_seconds": 5400,
+    "verifier_timeout_seconds": 3600,
+    "max_attempts": 1
+  },
+  "temperatures": {
+    "agent": "provider_default",
+    "judge": "provider_default"
+  },
+  "retry_policy": {
+    "transport_retries": 4,
+    "rate_limit_action": "wait_for_reset",
+    "judge_trial_retries": 3,
+    "judge_min_trials": 3
+  },
+  "rollout_count": {
+    "default_pass_at_k": 1
+  },
+  "health_checks": {
+    "bridge_healthz_url": "http://127.0.0.1:8788/healthz",
+    "bridge_healthz_max_wait_seconds": 10
+  },
+  "request_construction": {
+    "reasoning_display": "summarized",
+    "reasoning_type": "adaptive"
+  },
+  "submission_handoff": {
+    "poc_path": "/output/poc.bin",
+    "patch_path": "/output/fix.patch"
+  },
+  "scoring_handoff": {
+    "reward_json_path": "/logs/verifier/reward.json",
+    "reward_txt_path": "/logs/verifier/reward.txt",
+    "reward_range": [
+      -1.0,
+      1.0
+    ]
+  },
+  "configurationAdequacy": {
+    "attested": false,
+    "attested_by": null,
+    "attested_at": null,
+    "declared_horizon_seconds": 5400,
+    "measured_horizon_seconds": null,
+    "coverage_matrix_ref": null,
+    "control_coverage": {
+      "network_isolation": "declared",
+      "container_lockdown": "declared",
+      "verifier_isolation": "declared",
+      "resource_limits": "declared",
+      "solver_registry_pin": "unresolved",
+      "judge_reliability_discipline": "unresolved"
+    },
+    "adequacy_gap": "no attested adequacy declaration exists yet; horizon-vs-actual-latency evidence and a signed attestation are required before a pilot's harness_config_digest can be treated as adequacy-covered. Until then this configuration remains HOLD:SUPPRESSED_MEASUREMENT for the adequacy dimension."
+  },
+  "coverage_gaps": [
+    "harness_config_digest recorded at .seed/harness-config.digest is not yet folded into .seed/pilot.yaml's pilot block; that fold is deferred because pilot.yaml is Phase-0.5-bound and adding the field would re-trigger sign-off",
+    "configurationAdequacy.attested is false: adequacy is declared per-field but not attested. Every pilot promoted while attested=false stays HOLD:SUPPRESSED_MEASUREMENT for the adequacy dimension per trinity/FORGE.md G-FID-CONFIG (line 165)."
+  ]
+}

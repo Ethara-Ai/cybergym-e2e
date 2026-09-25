@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Pre-commit hook: refuse a commit if harness/README.md drifts from the
+# harness code.
+#
+# trinity/FORGE.md:184 requires "regenerate harness/README.md from the harness
+# code every run so it cannot drift from the implementation". This hook is
+# the local enforcement point: every commit that would move the README
+# without regenerating it is rejected here.
+#
+# Activate this hookset once with:
+#     git config core.hooksPath .githooks
+# from the harness submodule root.  Bypass a single commit with:
+#     SKIP_RENDER_README=1 git commit ...
+
+set -eu
+
+if [ "${SKIP_RENDER_README:-0}" = "1" ]; then
+    exit 0
+fi
+
+if [ ! -f scripts/render_readme.py ]; then
+    exit 0
+fi
+
+if ! python3 scripts/render_readme.py --check >/dev/null 2>&1; then
+    echo "hook: harness/README.md drift detected." >&2
+    echo "hook: run \`python3 scripts/render_readme.py\`, stage README.md, then re-commit." >&2
+    echo "hook: bypass this check for one commit with SKIP_RENDER_README=1." >&2
+    exit 1
+fi
+
+exit 0

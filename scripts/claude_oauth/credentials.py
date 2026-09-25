@@ -60,6 +60,9 @@ from typing import Optional
 
 import httpx
 
+from . import rotation_state
+from .rotation_state import account_lock
+
 _LOG = logging.getLogger(__name__)
 
 # Public Claude Code client identifier (same value ships in every release of
@@ -523,15 +526,37 @@ class CredentialProvider:
     ``REFRESH_LEEWAY_SECONDS`` of expiry.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, label: str = "default") -> None:
         self._lock = threading.Lock()
         self._creds: Optional[OAuthCredentials] = None
+        # Names this account for the cross-process refresh lock. Single-account
+        # use keeps "default", so its behaviour is unchanged.
+        self.label = label
 
     def get_access_token(self) -> str:
         with self._lock:
             if self._creds is None:
                 self._creds = load_credentials()
-            if self._creds.is_expired():
+            if not self._creds.is_expired():
+                return self._creds.access_token
+            # Cross-process serialization, mirroring _FileCredentialProvider.
+            # Anthropic rotates the refresh token and invalidates its
+            # predecessor immediately, so two processes refreshing the same
+            # account both spend one token and the loser is left holding a dead
+            # credential -- which classifies as a non-retryable 4xx and retires
+            # the account for the rest of the run. batch_run.sh runs up to
+            # MAX_PARALLEL bridges at once, so this is routine, not exotic.
+            with account_lock(self.label):
+                # Re-read: another process may have refreshed while we waited.
+                # Adopting its rotated token is the whole point of the lock.
+                try:
+                    fresh = load_credentials()
+                    if not fresh.is_expired():
+                        _LOG.info("adopted OAuth token refreshed by another process")
+                        self._creds = fresh
+                        return self._creds.access_token
+                except CredentialsError:
+                    pass
                 _LOG.info("Refreshing Claude Code OAuth token")
                 old = self._creds
                 self._creds = refresh_credentials(old)
@@ -570,8 +595,9 @@ class _FileCredentialProvider(CredentialProvider):
     """CredentialProvider that always loads from a specific file path."""
 
     def __init__(self, path: Path) -> None:
-        super().__init__()
-        self._path = Path(path).expanduser()
+        resolved = Path(path).expanduser()
+        super().__init__(label=f"file:{resolved}")
+        self._path = resolved
 
     def _load(self) -> OAuthCredentials:
         if not self._path.is_file():
@@ -596,14 +622,9 @@ class _FileCredentialProvider(CredentialProvider):
             # the refresh endpoint; others wait, then re-read the rotated
             # token. Without this, concurrent harness runs sharing the same
             # pool file race on refresh and lose tokens (last-writer-wins).
-            import fcntl
-            lock_path = self._path.with_suffix(self._path.suffix + ".lock")
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(lock_path, "w") as lock_fh:
-                try:
-                    fcntl.flock(lock_fh.fileno(), fcntl.LOCK_EX)
-                except OSError as e:
-                    _LOG.warning("flock failed on %s: %s; proceeding unlocked", lock_path, e)
+            # Uses the shared account_lock so all three providers get the same
+            # stale-lock reclaim and timeout behaviour.
+            with account_lock(self.label):
                 # Re-load -- another process may have refreshed while we waited.
                 try:
                     fresh = self._load()
@@ -629,7 +650,7 @@ class _KeychainCredentialProvider(CredentialProvider):
     """CredentialProvider that loads from a specific macOS Keychain service."""
 
     def __init__(self, service: str) -> None:
-        super().__init__()
+        super().__init__(label=f"keychain:{service}")
         self._service = service
 
     def _load(self) -> OAuthCredentials:
@@ -658,7 +679,22 @@ class _KeychainCredentialProvider(CredentialProvider):
         with self._lock:
             if self._creds is None:
                 self._creds = self._load()
-            if self._creds.is_expired():
+            if not self._creds.is_expired():
+                return self._creds.access_token
+            # Same cross-process guard as the base provider: one refresh per
+            # account machine-wide, because the refresh token rotates.
+            with account_lock(self.label):
+                try:
+                    fresh = self._load()
+                    if not fresh.is_expired():
+                        _LOG.info(
+                            "adopted OAuth token for keychain %s refreshed by another process",
+                            self._service,
+                        )
+                        self._creds = fresh
+                        return self._creds.access_token
+                except CredentialsError:
+                    pass
                 _LOG.info("Refreshing OAuth token from keychain %s", self._service)
                 old = self._creds
                 self._creds = refresh_credentials(old)
@@ -670,18 +706,66 @@ class _KeychainCredentialProvider(CredentialProvider):
             return self._creds.access_token[:20] if self._creds else None
 
 
+def _safe_load_state() -> Optional[dict]:
+    """One snapshot of shared rotation state, or None if it cannot be read."""
+    try:
+        return rotation_state.load()
+    except Exception as e:  # noqa: BLE001
+        _LOG.debug("rotation state unreadable: %s", e)
+        return None
+
+
 @dataclass
 class _AccountSlot:
+    """One pooled account.
+
+    Availability is the union of this process's own knowledge and the shared
+    state written by every other bridge process on this machine. The local
+    fields are kept as a fallback for when the shared store is unreadable, so a
+    broken state file degrades to the old in-memory behaviour instead of
+    failing the run.
+    """
+
     provider: CredentialProvider
     label: str
     exhausted_until: float = 0.0
     invalid: bool = False
 
-    def is_available(self, now: Optional[float] = None) -> bool:
-        if self.invalid:
+    def shared(self, state: Optional[dict] = None) -> Optional[dict]:
+        """This account's shared entry, or None if the store is unreadable.
+
+        Pass ``state`` (from ``rotation_state.load()``) when checking several
+        slots so the whole selection sees ONE consistent snapshot: reading
+        per-slot would let a concurrent write land mid-scan and produce a view
+        no single point in time ever had.
+        """
+        try:
+            if state is not None:
+                return state["accounts"].get(self.label) or rotation_state.default_account()
+            return rotation_state.get_account(self.label)
+        except Exception as e:  # noqa: BLE001 - never let state I/O break a run
+            _LOG.debug("rotation state unreadable for %s: %s", self.label, e)
+            return None
+
+    def effective_exhausted_until(self, state: Optional[dict] = None) -> float:
+        shared = self.shared(state)
+        if shared is None:
+            return self.exhausted_until
+        return max(self.exhausted_until, float(shared["cooldown_until"]))
+
+    def effective_invalid(self, state: Optional[dict] = None) -> bool:
+        shared = self.shared(state)
+        return self.invalid or (shared is not None and bool(shared["invalid"]))
+
+    def is_available(self, now: Optional[float] = None, state: Optional[dict] = None) -> bool:
+        # One read, not two: deriving both fields from separate reads let them
+        # disagree (invalid from before a write, cooldown from after).
+        if state is None:
+            state = _safe_load_state()
+        if self.effective_invalid(state):
             return False
         now = now if now is not None else time.time()
-        return now >= self.exhausted_until
+        return now >= self.effective_exhausted_until(state)
 
 
 class MultiAccountCredentialProvider:
@@ -702,6 +786,12 @@ class MultiAccountCredentialProvider:
         self._slots = slots
         self._lock = threading.Lock()
         self._last_used_index: int = 0
+        # Register every pooled account so `--pool-status` lists them before
+        # any of them has failed. One lock acquisition for the whole pool.
+        try:
+            rotation_state.ensure_accounts([s.label for s in slots])
+        except Exception as e:  # noqa: BLE001
+            _LOG.debug("could not register accounts in rotation state: %s", e)
 
     def get_access_token(self) -> str:
         with self._lock:
@@ -713,19 +803,27 @@ class MultiAccountCredentialProvider:
             # Network blip / upstream 5xx: the slot is still good; surface the
             # error instead of retiring the account for the rest of the run.
             raise
-        except CredentialsError:
+        except CredentialsError as e:
             with self._lock:
                 slot.invalid = True
+            self._persist_invalid(slot, f"credential rejected: {e}")
             return self.get_access_token()
 
     def _select_slot_locked(self) -> tuple[_AccountSlot, int]:
         now = time.time()
+        # Single snapshot for the whole scan, so selection cannot see account A
+        # as it was before a write and account B as it was after.
+        state = _safe_load_state()
         for idx, slot in enumerate(self._slots):
-            if slot.is_available(now):
+            if slot.is_available(now, state):
                 return slot, idx
         # All accounts exhausted/invalid -- raise with earliest reset hint.
         soonest = min(
-            (s.exhausted_until for s in self._slots if not s.invalid),
+            (
+                s.effective_exhausted_until(state)
+                for s in self._slots
+                if not s.effective_invalid(state)
+            ),
             default=0.0,
         )
         delta = max(0.0, soonest - now)
@@ -734,11 +832,37 @@ class MultiAccountCredentialProvider:
         )
 
     def force_reload(self) -> None:
+        """Drop cached tokens and this process's own cooldown view.
+
+        Deliberately does NOT clear shared state: a cap observed by another
+        worker is still real, and wiping it here would send every process back
+        to hammering a capped account. Operator reset is
+        ``python -m claude_oauth --clear-cooldowns``.
+        """
         with self._lock:
             for slot in self._slots:
                 slot.provider.force_reload()
                 slot.exhausted_until = 0.0
                 slot.invalid = False
+
+    @staticmethod
+    def _persist_cooldown(slot: _AccountSlot, until_unix: float, reason: str) -> None:
+        """Publish a cooldown so sibling bridge processes skip this account too.
+
+        Best-effort: a failure here costs cross-process visibility, never the
+        run, so the local field remains the fallback.
+        """
+        try:
+            rotation_state.mark_cooldown(slot.label, until_unix, reason)
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("could not publish cooldown for %s: %s", slot.label, e)
+
+    @staticmethod
+    def _persist_invalid(slot: _AccountSlot, reason: str) -> None:
+        try:
+            rotation_state.mark_invalid(slot.label, reason)
+        except Exception as e:  # noqa: BLE001
+            _LOG.warning("could not publish invalidation for %s: %s", slot.label, e)
 
     def mark_account_exhausted(self, token_prefix: str, until_unix: float) -> None:
         with self._lock:
@@ -750,6 +874,23 @@ class MultiAccountCredentialProvider:
                 "account %s marked exhausted until %s (in %.0fs)",
                 slot.label, until_unix, max(0.0, until_unix - time.time()),
             )
+        self._persist_cooldown(slot, until_unix, "subscription cap")
+
+    def mark_account_success(self, token_prefix: str) -> None:
+        """Clear the failure streak for the account that just succeeded.
+
+        Cooldowns are deliberately NOT cleared: a 2xx can be served while a
+        5-hour window is still counting down, and un-cooling on it would send
+        every worker straight back at a capped account.
+        """
+        with self._lock:
+            slot = self._find_slot_by_prefix_locked(token_prefix)
+        if slot is None:
+            return
+        try:
+            rotation_state.mark_success(slot.label)
+        except Exception as e:  # noqa: BLE001
+            _LOG.debug("could not record success for %s: %s", slot.label, e)
 
     def mark_account_invalid(self, token_prefix: str) -> None:
         with self._lock:
@@ -758,23 +899,32 @@ class MultiAccountCredentialProvider:
                 return
             slot.invalid = True
             _LOG.warning("account %s marked invalid (will not be retried)", slot.label)
+        self._persist_invalid(slot, "rejected by Anthropic")
 
     def mark_current_exhausted(self, until_unix: float) -> None:
+        target: Optional[_AccountSlot] = None
         with self._lock:
             if 0 <= self._last_used_index < len(self._slots):
                 slot = self._slots[self._last_used_index]
                 slot.exhausted_until = max(slot.exhausted_until, until_unix)
+                target = slot
                 _LOG.info(
                     "account %s marked exhausted until %s (in %.0fs)",
                     slot.label, until_unix, max(0.0, until_unix - time.time()),
                 )
+        if target is not None:
+            self._persist_cooldown(target, until_unix, "subscription cap")
 
     def mark_current_invalid(self) -> None:
+        target: Optional[_AccountSlot] = None
         with self._lock:
             if 0 <= self._last_used_index < len(self._slots):
                 slot = self._slots[self._last_used_index]
                 slot.invalid = True
+                target = slot
                 _LOG.warning("account %s marked invalid", slot.label)
+        if target is not None:
+            self._persist_invalid(target, "rejected by Anthropic")
 
     def next_reset_at(self) -> Optional[float]:
         """Soonest Unix-time at which any exhausted account becomes available.
@@ -783,20 +933,29 @@ class MultiAccountCredentialProvider:
         """
         with self._lock:
             now = time.time()
-            if any(s.is_available(now) for s in self._slots):
+            state = _safe_load_state()
+            if any(s.is_available(now, state) for s in self._slots):
                 return None
-            future = [s.exhausted_until for s in self._slots if not s.invalid]
+            future = [
+                s.effective_exhausted_until(state)
+                for s in self._slots
+                if not s.effective_invalid(state)
+            ]
             return min(future) if future else None
 
     def snapshot(self) -> list[dict]:
+        state = _safe_load_state()
         with self._lock:
             return [
                 {
                     "label": s.label,
                     "token_prefix": getattr(s.provider, "token_prefix", lambda: None)(),
-                    "invalid": s.invalid,
-                    "exhausted_until": s.exhausted_until,
-                    "available": s.is_available(),
+                    "invalid": s.effective_invalid(state),
+                    "exhausted_until": s.effective_exhausted_until(state),
+                    "available": s.is_available(None, state),
+                    # Whether this worker can see the pool-wide view or has
+                    # degraded to its own process-local knowledge.
+                    "state_source": "shared" if s.shared(state) is not None else "local",
                 }
                 for s in self._slots
             ]
@@ -871,10 +1030,14 @@ def load_account_pool(spec: str) -> Optional[MultiAccountCredentialProvider]:
                 label=f"keychain:{service}",
             ))
             continue
-        # Treat as file path.
+        # Treat as file path. The label is the RESOLVED path so that the same
+        # account referenced two ways ("~/a.json" and "/home/u/a.json") maps to
+        # one rotation-state entry and one refresh lock, instead of two that
+        # disagree about whether it is cold.
+        resolved = Path(entry).expanduser()
         slots.append(_AccountSlot(
-            provider=_FileCredentialProvider(Path(entry)),
-            label=f"file:{entry}",
+            provider=_FileCredentialProvider(resolved),
+            label=f"file:{resolved}",
         ))
     if not slots:
         return None
